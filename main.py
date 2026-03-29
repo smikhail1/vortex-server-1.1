@@ -53,10 +53,7 @@ def update_pools(screener, fut_eng, spot_eng, stream, engines):
         active_fut  = [fut_eng.get_position().symbol] if fut_eng.get_position() else []
         active_spot = list(spot_eng.get_all_positions().keys())
 
-        # базовые монеты всегда в пуле фьючерсов
         base = ["BTCUSDT", "ETHUSDT"]
-
-        # скринер возвращает живые кандидаты
         candidates = screener.update_watchlist()
         DASHBOARD["scanner_top"] = candidates
 
@@ -119,7 +116,6 @@ async def main():
         try:
             await asyncio.sleep(5)
 
-            # ротация каждые 15 минут
             if time.time() - DASHBOARD["last_pool_update"] > 900:
                 await loop.run_in_executor(
                     None, update_pools, screener, fut_eng, spot_eng, stream, engines
@@ -195,7 +191,6 @@ async def main():
                                          fut_eng.get_balance(), spot_eng.get_balance())
                         DASHBOARD["fut_args"][s] = "Ожидание..."
 
-                        # монета отработала — убираем из пула если не базовая
                         if s not in ("BTCUSDT", "ETHUSDT"):
                             if s in screener.watchlist:
                                 del screener.watchlist[s]
@@ -203,6 +198,9 @@ async def main():
                 else:
                     sig = strat.analyze_futures(analysis, s, global_filter)
                     DASHBOARD["fut_args"][s] = sig.get("args_text", "Ожидание...")
+                
+                # Микро-пауза для разгрузки сервера API
+                await asyncio.sleep(0.01)
 
             # ═══════════ СПОТ ═══════════
             for s in list(DASHBOARD["spot_pool"]):
@@ -241,7 +239,6 @@ async def main():
                                      fut_eng.get_balance(), spot_eng.get_balance())
                     DASHBOARD["spot_args"][s] = "Ожидание..."
 
-                    # удаляем из пула после закрытия
                     if s in screener.watchlist:
                         del screener.watchlist[s]
                     continue
@@ -272,6 +269,9 @@ async def main():
                                 DASHBOARD["spot_args"][s] = (
                                     f"🟢 В СДЕЛКЕ (DCA 1) | TP:{tp:.4f}"
                                 )
+                
+                # Микро-пауза для разгрузки сервера API
+                await asyncio.sleep(0.01)
 
             DASHBOARD["balances"]["fut"]  = round(fut_eng.get_balance(), 2)
             DASHBOARD["balances"]["spot"] = round(spot_eng.get_balance(), 2)
