@@ -1,58 +1,68 @@
-import asyncio, requests, time
+import asyncio, aiohttp, time
 
 class MarketDataStream:
     def __init__(self, fut, spot):
-        self.fut_symbols = fut
+        self.fut_symbols  = fut
         self.spot_symbols = spot
-        self.buffers = {}
+        self.buffers      = {}
 
-    async def fetch_data(self, symbol, market_type):
+    async def fetch_data(self, session, symbol, market_type):
         try:
             url_candles = f"https://api.bitget.com/api/v2/{market_type}/market/candles"
-            url_depth = f"https://api.bitget.com/api/v2/{market_type}/market/depth"
-            
-            # Адаптация под API Bitget: для фьючей обычно 1H/4H, для спота 1h/4h
-            g_1h = "1H" if market_type == "mix" else "1h"
-            g_4h = "4H" if market_type == "mix" else "4h"
-            
-            # Сразу грузим 100 свечей истории, чтобы бот не ждал сутки
-            p_1h = {"symbol": symbol, "granularity": g_1h, "limit": 100}
-            p_4h = {"symbol": symbol, "granularity": g_4h, "limit": 50}
-            p_depth = {"symbol": symbol, "type": "step0", "limit": 50}
-            
-            if market_type == "mix": 
-                p_1h["productType"] = p_4h["productType"] = p_depth["productType"] = "USDT-FUTURES"
+            url_depth   = f"https://api.bitget.com/api/v2/{market_type}/market/depth"
 
-            r_1h = requests.get(url_candles, params=p_1h, timeout=3).json()
-            r_4h = requests.get(url_candles, params=p_4h, timeout=3).json()
-            r_depth = requests.get(url_depth, params=p_depth, timeout=3).json()
+            g_30m = "30m"
+            g_4h  = "4H" if market_type == "mix" else "4h"
 
-            if r_1h.get("code") == "00000" and r_4h.get("code") == "00000":
-                if symbol not in self.buffers: self.buffers[symbol] = {}
-                
-                # Теперь движок получит ключи, которые он ждет
-                self.buffers[symbol]["1h"] = r_1h["data"]
-                self.buffers[symbol]["4h"] = r_4h["data"]
-                self.buffers[symbol]["last_price"] = float(r_1h["data"][0][4])
-                
+            p_30m  = {"symbol": symbol, "granularity": g_30m, "limit": 60}
+            p_4h   = {"symbol": symbol, "granularity": g_4h,  "limit": 30}
+            p_depth = {"symbol": symbol, "type": "step0",     "limit": 50}
+
+            if market_type == "mix":
+                for p in (p_30m, p_4h, p_depth):
+                    p["productType"] = "USDT-FUTURES"
+
+            async with session.get(url_candles, params=p_30m) as r1:
+                r_30m = await r1.json(content_type=None)
+            async with session.get(url_candles, params=p_4h) as r2:
+                r_4h = await r2.json(content_type=None)
+            async with session.get(url_depth, params=p_depth) as r3:
+                r_depth = await r3.json(content_type=None)
+
+            if r_30m.get("code") == "00000" and r_4h.get("code") == "00000":
+                if symbol not in self.buffers:
+                    self.buffers[symbol] = {}
+
+                self.buffers[symbol]["30m"]        = r_30m["data"]
+                self.buffers[symbol]["4h"]         = r_4h["data"]
+                self.buffers[symbol]["last_price"] = float(r_30m["data"][0][4])
+                self.buffers[symbol]["updated_at"] = time.time()
+
                 if r_depth.get("code") == "00000":
-                    bids = sum([float(x[1]) for x in r_depth["data"]["bids"]])
-                    asks = sum([float(x[1]) for x in r_depth["data"]["asks"]])
+                    bids = sum(float(x[1]) for x in r_depth["data"]["bids"])
+                    asks = sum(float(x[1]) for x in r_depth["data"]["asks"])
                     self.buffers[symbol]["imbalance"] = bids / asks if asks > 0 else 1.0
-                    
-                if len(self.buffers) > 20:
-                    inactive = [s for s in self.buffers if s not in self.fut_symbols + self.spot_symbols]
-                    if inactive: del self.buffers[inactive[0]]
+
+                vols = [float(x[5]) for x in r_30m["data"][:20]]
+                self.buffers[symbol]["last_vol"] = vols[0] if vols else 0
+                self.buffers[symbol]["avg_vol"]  = sum(vols[1:]) / len(vols[1:]) if len(vols) > 1 else 1
+
         except Exception:
-            pass 
+            pass
 
     async def connect(self):
-        while True:
-            for sym in set(self.fut_symbols):
-                await self.fetch_data(sym, "mix")
-                await asyncio.sleep(0.1)
-            for sym in set(self.spot_symbols):
-                await self.fetch_data(sym, "spot")
-                await asyncio.sleep(0.1)
-            # Для часовых свечей спамить биржу раз в секунду нет смысла
-            await asyncio.sleep(3)
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            while True:
+                all_syms = list(set(self.fut_symbols + self.spot_symbols))
+                for sym in all_syms:
+                    mtype = "mix" if sym in self.fut_symbols else "spot"
+                    await self.fetch_data(session, sym, mtype)
+                    await asyncio.sleep(0.1)
+
+                # чистим буферы неактивных монет
+                active = set(self.fut_symbols + self.spot_symbols)
+                for s in [s for s in list(self.buffers) if s not in active]:
+                    del self.buffers[s]
+
+                await asyncio.sleep(3)

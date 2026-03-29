@@ -1,32 +1,60 @@
 import time
-class SpotPosition:
-    def __init__(self, symbol, qty_usd, entry_price, sl, tp):
-        self.symbol = symbol; self.qty_usd = qty_usd; self.qty_coins = qty_usd / entry_price
-        self.entry_price = entry_price; self.sl = sl; self.tp = tp
-        self.open_time = time.time(); self.breakeven_triggered = False; self.pnl = 0.0
 
 class PaperSpot:
     def __init__(self):
-        self.balance = 100.0; self.positions = {}
+        self.balance   = 100.0
+        self.positions = {}
+
     def get_balance(self): return self.balance
     def get_all_positions(self): return self.positions
     def get_position(self, symbol): return self.positions.get(symbol)
-    def open_position(self, symbol, qty_usd, entry_price, sl_dummy, atr):
-        if symbol in self.positions: return {"code": "1"}
-        tp_dist = entry_price * 0.012
-        sl_dist = max(atr * 2, entry_price * 0.015)
-        self.positions[symbol] = SpotPosition(symbol, qty_usd, entry_price, entry_price - sl_dist, entry_price + tp_dist)
+
+    def open_position(self, symbol, qty, price, tp, atr):
+        sl = price - atr * 2
+        self.positions[symbol] = type("Pos", (), {
+            "symbol":    symbol,
+            "qty":       qty,
+            "entry":     price,
+            "tp":        tp,
+            "tp2":       price + atr * 7,
+            "sl":        sl,
+            "atr":       atr,
+            "open_time": time.time(),
+            "pnl":       0.0,
+            "tp1_hit":   False,
+            "trail_sl":  sl,
+        })()
         return {"code": "00000"}
+
     def check_stops(self, symbol, current_price):
-        if symbol not in self.positions: return None
-        pos = self.positions[symbol]
-        pos.pnl = (current_price - pos.entry_price) * pos.qty_coins
-        if (current_price - pos.entry_price) / pos.entry_price >= 0.006 and not pos.breakeven_triggered:
-            pos.sl = pos.entry_price * 1.0025; pos.breakeven_triggered = True
-        reason = "BU" if current_price <= pos.sl and pos.breakeven_triggered else ("SL" if current_price <= pos.sl else ("TP" if current_price >= pos.tp else None))
+        pos = self.positions.get(symbol)
+        if not pos:
+            return None
+
+        pos.pnl = (current_price - pos.entry) * pos.qty
+
+        # TP1 достигнут — переходим на трейлинг
+        if not pos.tp1_hit and current_price >= pos.tp:
+            pos.tp1_hit = True
+            pos.sl      = pos.entry  # брейкивен
+
+        if pos.tp1_hit:
+            new_trail = current_price - pos.atr * 2
+            if new_trail > pos.trail_sl:
+                pos.trail_sl = new_trail
+                pos.sl       = pos.trail_sl
+
+        reason = None
+        if current_price <= pos.sl:
+            reason = "BU" if pos.tp1_hit else "SL"
+        elif pos.tp1_hit and current_price >= pos.tp2:
+            reason = "TP2"
+        elif not pos.tp1_hit and current_price >= pos.tp:
+            reason = "TP1"
+
         if reason:
-            final_pnl = (current_price - pos.entry_price) * pos.qty_coins
-            self.balance += final_pnl
+            pnl = pos.pnl
+            self.balance += pnl
             del self.positions[symbol]
-            return {"code": "00000", "data": {"pnl": final_pnl, "reason": reason}}
+            return {"code": "00000", "data": {"pnl": pnl, "reason": reason}}
         return None
