@@ -48,13 +48,14 @@ def format_trade(sym, pnl, reason):
     icon = "✅" if pnl > 0 else ("🚨" if pnl < 0 else "🛡️")
     return f"{icon} [{time.strftime('%H:%M:%S')}] {sym} | {round(pnl,3)} USDT ({ru})"
 
-def update_pools(screener, fut_eng, spot_eng, stream, engines):
+async def update_pools(screener, fut_eng, spot_eng, stream, engines):
     try:
         active_fut  = [fut_eng.get_position().symbol] if fut_eng.get_position() else []
         active_spot = list(spot_eng.get_all_positions().keys())
 
         base = ["BTCUSDT", "ETHUSDT"]
-        candidates = screener.update_watchlist()
+        
+        candidates = await screener.get_top_symbols()
         DASHBOARD["scanner_top"] = candidates
 
         new_fut = list(dict.fromkeys(
@@ -91,13 +92,14 @@ def update_pools(screener, fut_eng, spot_eng, stream, engines):
 
 async def main():
     logger.init_logger()
-    add_sys_log("🚀 [SYSTEM]", "Vortex Swing Terminal v2 запускается...")
+    add_sys_log("🚀 [SYSTEM]", "Vortex Swing Terminal v3 запускается...")
 
     fut_eng  = PaperFutures()
     spot_eng = PaperSpot()
     strat    = SwingStrategy()
     screener = MarketScreener()
 
+    asyncio.create_task(screener.run())
     asyncio.create_task(SysMonitor(DASHBOARD).start())
     asyncio.create_task(MarketOracle(DASHBOARD).start())
     asyncio.create_task(APIServer(DASHBOARD).start(port=8080))
@@ -106,175 +108,182 @@ async def main():
     engines = {s: TAEngine() for s in DASHBOARD["fut_pool"]}
     asyncio.create_task(stream.connect())
 
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(
-        None, update_pools, screener, fut_eng, spot_eng, stream, engines
-    )
+    add_sys_log("⏳ [SYSTEM]", "Ожидание первых данных от скринера...")
+    while not screener.is_ready:
+        await asyncio.sleep(1)
+
+    await update_pools(screener, fut_eng, spot_eng, stream, engines)
     add_sys_log("✅ [SYSTEM]", f"Пул: {DASHBOARD['fut_pool']}")
+
+    last_strat_calc = 0
 
     while True:
         try:
-            await asyncio.sleep(5)
+            # БЫСТРЫЙ ЦИКЛ: Спит всего 1 секунду для обновления UI
+            await asyncio.sleep(1)
 
-            if time.time() - DASHBOARD["last_pool_update"] > 900:
-                await loop.run_in_executor(
-                    None, update_pools, screener, fut_eng, spot_eng, stream, engines
-                )
+            # 1. Мгновенно обновляем текущие цены для фронтенда
+            for s in list(DASHBOARD["fut_pool"]) + list(DASHBOARD["spot_pool"]):
+                buf = stream.buffers.get(s, {})
+                if "last_price" in buf:
+                    DASHBOARD["current_prices"][s] = buf["last_price"]
 
-            global_filter = DASHBOARD["macro"].get("global_filter", "allow_all")
+            # 2. МЕДЛЕННЫЙ ЦИКЛ: Торговая логика (раз в 5 секунд)
+            now = time.time()
+            if now - last_strat_calc >= 5:
+                last_strat_calc = now
 
-            # ═══════════ ФЬЮЧЕРСЫ ═══════════
-            for s in list(DASHBOARD["fut_pool"]):
-                buf   = stream.buffers.get(s, {})
-                price = buf.get("last_price", 0)
-                if price <= 0:
-                    continue
-                DASHBOARD["current_prices"][s] = price
+                if time.time() - DASHBOARD["last_pool_update"] > 900:
+                    await update_pools(screener, fut_eng, spot_eng, stream, engines)
 
-                if s not in engines:
-                    engines[s] = TAEngine()
-                analysis = engines[s].analyze_all(buf)
+                global_filter = DASHBOARD["macro"].get("global_filter", "allow_all")
 
-                if not analysis:
-                    DASHBOARD["fut_args"][s] = "Сбор данных 30m/4H..."
-                    continue
+                for s in list(DASHBOARD["fut_pool"]):
+                    buf   = stream.buffers.get(s, {})
+                    price = buf.get("last_price", 0)
+                    if price <= 0:
+                        continue
 
-                pos = fut_eng.get_position()
+                    if s not in engines:
+                        engines[s] = TAEngine()
+                    analysis = engines[s].analyze_all(buf)
 
-                if not pos:
-                    sig = strat.analyze_futures(analysis, s, global_filter)
-                    DASHBOARD["fut_args"][s] = sig.get("args_text", "Ожидание...")
+                    if not analysis:
+                        DASHBOARD["fut_args"][s] = "Сбор данных 30m/4H..."
+                        continue
 
-                    if sig.get("signal", "neutral") != "neutral":
-                        tp  = sig.get("take_profit", 0)
-                        sl  = sig.get("stop_loss",   0)
-                        lev = sig.get("leverage",    3)
-                        qty = round((100 * lev) / price, 6)
+                    pos = fut_eng.get_position()
 
-                        if fut_eng.open_position(
-                            s, sig["signal"], qty, price, tp, sl, analysis["atr"]
-                        )["code"] == "00000":
-                            add_sys_log("🎯 [FUT]",
-                                f"{sig['signal'].upper()} {s} @ {price:.4f} "
-                                f"TP:{tp:.4f} SL:{sl:.4f}")
-                            DASHBOARD["fut_args"][s] = (
-                                f"🔴 В СДЕЛКЕ ({sig['signal'].upper()}) | "
-                                f"TP:{tp:.4f} SL:{sl:.4f} | PnL:0.00"
-                            )
+                    if not pos:
+                        sig = strat.analyze_futures(analysis, s, global_filter)
+                        DASHBOARD["fut_args"][s] = sig.get("args_text", "Ожидание...")
 
-                elif pos.symbol == s:
-                    fee = 100.0 * 3 * 0.0012
-                    dur = time.time() - pos.open_time
-                    DASHBOARD["fut_args"][s] = (
-                        f"🔴 В СДЕЛКЕ ({pos.side.upper()}) | "
-                        f"En:{pos.entry:.4f} | "
-                        f"PnL:{round(pos.pnl - fee, 2)}"
-                    )
-                    r = fut_eng.check_stops(price)
-                    if r:
-                        net_pnl = r["data"]["pnl"] - fee
-                        DASHBOARD["daily_pnl_fut"] += net_pnl
-                        reason = r["data"]["reason"]
+                        if sig.get("signal", "neutral") != "neutral":
+                            tp  = sig.get("take_profit", 0)
+                            sl  = sig.get("stop_loss",   0)
+                            lev = sig.get("leverage",    3)
+                            qty = round((100 * lev) / price, 6)
+
+                            if fut_eng.open_position(
+                                s, sig["signal"], qty, price, tp, sl, analysis["atr"]
+                            )["code"] == "00000":
+                                add_sys_log("🎯 [FUT]",
+                                    f"{sig['signal'].upper()} {s} @ {price:.4f} "
+                                    f"TP:{tp:.4f} SL:{sl:.4f}")
+                                DASHBOARD["fut_args"][s] = (
+                                    f"🔴 В СДЕЛКЕ ({sig['signal'].upper()}) | "
+                                    f"TP:{tp:.4f} SL:{sl:.4f} | PnL:0.00"
+                                )
+
+                    elif pos.symbol == s:
+                        fee = 100.0 * 3 * 0.0012
+                        dur = time.time() - pos.open_time
+                        DASHBOARD["fut_args"][s] = (
+                            f"🔴 В СДЕЛКЕ ({pos.side.upper()}) | "
+                            f"En:{pos.entry:.4f} | "
+                            f"PnL:{round(pos.pnl - fee, 2)}"
+                        )
+                        r = fut_eng.check_stops(price)
+                        if r:
+                            net_pnl = r["data"]["pnl"] - fee
+                            DASHBOARD["daily_pnl_fut"] += net_pnl
+                            reason = r["data"]["reason"]
+                            if net_pnl > 0:
+                                DASHBOARD["fut_wins"] += 1
+                                strat.reset_streak(s)
+                            else:
+                                DASHBOARD["fut_losses"] += 1
+                                strat.add_loss(s)
+
+                            t_fmt = format_trade(s, net_pnl, reason)
+                            DASHBOARD["fut_trades"].insert(0, t_fmt)
+                            if len(DASHBOARD["fut_trades"]) > 50:
+                                DASHBOARD["fut_trades"].pop()
+                            add_sys_log("💰 [FUT]", t_fmt)
+                            logger.log_trade("FUT", s, net_pnl, reason, dur,
+                                             fut_eng.get_balance(), spot_eng.get_balance())
+                            DASHBOARD["fut_args"][s] = "Ожидание..."
+
+                            if s not in ("BTCUSDT", "ETHUSDT"):
+                                if s in screener.watchlist:
+                                    del screener.watchlist[s]
+
+                    else:
+                        sig = strat.analyze_futures(analysis, s, global_filter)
+                        DASHBOARD["fut_args"][s] = sig.get("args_text", "Ожидание...")
+                    
+                    await asyncio.sleep(0.01)
+
+                for s in list(DASHBOARD["spot_pool"]):
+                    buf   = stream.buffers.get(s, {})
+                    price = buf.get("last_price", 0)
+                    if price <= 0:
+                        continue
+
+                    if s not in engines:
+                        engines[s] = TAEngine()
+                    analysis = engines[s].analyze_all(buf)
+
+                    if not analysis:
+                        DASHBOARD["spot_args"][s] = "Сбор данных 30m/4H..."
+                        continue
+
+                    pos_s = spot_eng.get_position(s)
+                    res_s = spot_eng.check_stops(s, price)
+
+                    if res_s:
+                        net_pnl = res_s["data"]["pnl"] - (33.3 * 0.002)
+                        DASHBOARD["daily_pnl_spot"] += net_pnl
+                        reason = res_s["data"]["reason"]
                         if net_pnl > 0:
-                            DASHBOARD["fut_wins"] += 1
-                            strat.reset_streak(s)
+                            DASHBOARD["spot_wins"] += 1
                         else:
-                            DASHBOARD["fut_losses"] += 1
-                            strat.add_loss(s)
+                            DASHBOARD["spot_losses"] += 1
 
                         t_fmt = format_trade(s, net_pnl, reason)
-                        DASHBOARD["fut_trades"].insert(0, t_fmt)
-                        if len(DASHBOARD["fut_trades"]) > 50:
-                            DASHBOARD["fut_trades"].pop()
-                        add_sys_log("💰 [FUT]", t_fmt)
-                        logger.log_trade("FUT", s, net_pnl, reason, dur,
+                        DASHBOARD["spot_trades"].insert(0, t_fmt)
+                        if len(DASHBOARD["spot_trades"]) > 50:
+                            DASHBOARD["spot_trades"].pop()
+                        logger.log_trade("SPOT", s, net_pnl, reason,
+                                         time.time() - (pos_s.open_time if pos_s else time.time()),
                                          fut_eng.get_balance(), spot_eng.get_balance())
-                        DASHBOARD["fut_args"][s] = "Ожидание..."
+                        DASHBOARD["spot_args"][s] = "Ожидание..."
 
-                        if s not in ("BTCUSDT", "ETHUSDT"):
-                            if s in screener.watchlist:
-                                del screener.watchlist[s]
+                        if s in screener.watchlist:
+                            del screener.watchlist[s]
+                        continue
 
-                else:
-                    sig = strat.analyze_futures(analysis, s, global_filter)
-                    DASHBOARD["fut_args"][s] = sig.get("args_text", "Ожидание...")
-                
-                # Микро-пауза для разгрузки сервера API
-                await asyncio.sleep(0.01)
-
-            # ═══════════ СПОТ ═══════════
-            for s in list(DASHBOARD["spot_pool"]):
-                buf   = stream.buffers.get(s, {})
-                price = buf.get("last_price", 0)
-                if price <= 0:
-                    continue
-                DASHBOARD["current_prices"][s] = price
-
-                if s not in engines:
-                    engines[s] = TAEngine()
-                analysis = engines[s].analyze_all(buf)
-
-                if not analysis:
-                    DASHBOARD["spot_args"][s] = "Сбор данных 30m/4H..."
-                    continue
-
-                pos_s = spot_eng.get_position(s)
-                res_s = spot_eng.check_stops(s, price)
-
-                if res_s:
-                    net_pnl = res_s["data"]["pnl"] - (33.3 * 0.002)
-                    DASHBOARD["daily_pnl_spot"] += net_pnl
-                    reason = res_s["data"]["reason"]
-                    if net_pnl > 0:
-                        DASHBOARD["spot_wins"] += 1
+                    if pos_s:
+                        fee_s = 33.3 * 0.002
+                        DASHBOARD["spot_args"][s] = (
+                            f"🟢 В СДЕЛКЕ | En:{pos_s.entry:.4f} | "
+                            f"PnL:{round(pos_s.pnl - fee_s, 2)}"
+                        )
                     else:
-                        DASHBOARD["spot_losses"] += 1
+                        sig_s = strat.analyze_spot(analysis, s, global_filter)
+                        DASHBOARD["spot_args"][s] = sig_s.get("args_text", "Поиск...")
 
-                    t_fmt = format_trade(s, net_pnl, reason)
-                    DASHBOARD["spot_trades"].insert(0, t_fmt)
-                    if len(DASHBOARD["spot_trades"]) > 50:
-                        DASHBOARD["spot_trades"].pop()
-                    logger.log_trade("SPOT", s, net_pnl, reason,
-                                     time.time() - (pos_s.open_time if pos_s else time.time()),
-                                     fut_eng.get_balance(), spot_eng.get_balance())
-                    DASHBOARD["spot_args"][s] = "Ожидание..."
-
-                    if s in screener.watchlist:
-                        del screener.watchlist[s]
-                    continue
-
-                if pos_s:
-                    fee_s = 33.3 * 0.002
-                    DASHBOARD["spot_args"][s] = (
-                        f"🟢 В СДЕЛКЕ | En:{pos_s.entry:.4f} | "
-                        f"PnL:{round(pos_s.pnl - fee_s, 2)}"
-                    )
-                else:
-                    sig_s = strat.analyze_spot(analysis, s, global_filter)
-                    DASHBOARD["spot_args"][s] = sig_s.get("args_text", "Поиск...")
-
-                    if (sig_s.get("signal") == "long_dca"
-                            and len(spot_eng.get_all_positions()) < 3):
-                        orders = sig_s.get("orders", [])
-                        tp     = sig_s.get("take_profit", 0)
-                        if orders:
-                            qty = round(
-                                (100 * orders[0]["size_pct"] / 100) / price, 6
-                            )
-                            if spot_eng.open_position(
-                                s, qty, price, tp, analysis["atr"]
-                            )["code"] == "00000":
-                                add_sys_log("🎯 [SPOT]",
-                                    f"DCA {s} @ {price:.4f} TP:{tp:.4f}")
-                                DASHBOARD["spot_args"][s] = (
-                                    f"🟢 В СДЕЛКЕ (DCA 1) | TP:{tp:.4f}"
+                        if (sig_s.get("signal") == "long_dca"
+                                and len(spot_eng.get_all_positions()) < 3):
+                            orders = sig_s.get("orders", [])
+                            tp     = sig_s.get("take_profit", 0)
+                            if orders:
+                                qty = round(
+                                    (100 * orders[0]["size_pct"] / 100) / price, 6
                                 )
-                
-                # Микро-пауза для разгрузки сервера API
-                await asyncio.sleep(0.01)
+                                if spot_eng.open_position(
+                                    s, qty, price, tp, analysis["atr"]
+                                )["code"] == "00000":
+                                    add_sys_log("🎯 [SPOT]",
+                                        f"DCA {s} @ {price:.4f} TP:{tp:.4f}")
+                                    DASHBOARD["spot_args"][s] = (
+                                        f"🟢 В СДЕЛКЕ (DCA 1) | TP:{tp:.4f}"
+                                    )
+                    
+                    await asyncio.sleep(0.01)
 
-            DASHBOARD["balances"]["fut"]  = round(fut_eng.get_balance(), 2)
-            DASHBOARD["balances"]["spot"] = round(spot_eng.get_balance(), 2)
+                DASHBOARD["balances"]["fut"]  = round(fut_eng.get_balance(), 2)
+                DASHBOARD["balances"]["spot"] = round(spot_eng.get_balance(), 2)
 
         except Exception as e:
             add_sys_log("⚠️ [ERR]", str(e))

@@ -31,6 +31,7 @@ class SysMonitor:
 
     async def start(self):
         timeout = aiohttp.ClientTimeout(total=3)
+        last_ping = 0
         async with aiohttp.ClientSession(timeout=timeout) as session:
             while True:
                 u = int(time.time() - self.start_time)
@@ -38,5 +39,11 @@ class SysMonitor:
                     f"{u//3600:02d}:{(u%3600)//60:02d}:{u%60:02d}"
                 )
                 self.dashboard["server_status"]["ram_mb"] = self.get_ram()
-                self.dashboard["server_status"]["ping_ms"] = await self.get_ping(session)
-                await asyncio.sleep(5)
+                
+                # Пинг запрашиваем раз в 5 секунд
+                if time.time() - last_ping > 5:
+                    self.dashboard["server_status"]["ping_ms"] = await self.get_ping(session)
+                    last_ping = time.time()
+
+                # Таймер спит 1 секунду для плавности UI
+                await asyncio.sleep(1)
