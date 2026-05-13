@@ -1,3 +1,9 @@
 venv/
 __pycache__/
 .env
+vortex.log
+*.log
+vortex.log
+server.log
+*.log
+*.tar.gz

@@ -1,235 +1,95 @@
-import time
+from typing import Dict, List, Optional
+from config import CONFIG
+from validators import safe_bool, safe_float, safe_str
+try: from momentum_engine import MomentumEngine
+except: MomentumEngine = None
 
 class SwingStrategy:
     def __init__(self):
-        self.cooldowns = {}
-        self.loss_streak = {}
+        self.momentum = MomentumEngine() if MomentumEngine else None
 
-    def set_cooldown(self, symbol, hours=4):
-        self.cooldowns[symbol] = time.time() + hours * 3600
+    def _result(self, should_open=False, signal=None, score=0, setup_type=None, args=None, blocked_reason=None, threshold=0, extra=None):
+        return {"should_open": bool(should_open), "signal": signal, "score": int(score), "setup_type": setup_type, "args_text": " | ".join(args or []), "blocked_reason": blocked_reason, "threshold": int(threshold), **(extra or {})}
 
-    def is_cooling_down(self, symbol):
-        return time.time() < self.cooldowns.get(symbol, 0)
+    def analyze_futures(self, current, macro_filter="allow_all"):
+        d = current or {}
+        thresh = int(CONFIG.trading.futures_min_score_to_open)
+        adx = safe_float(d.get("adx"), 25.0) # По умолчанию нейтрально
+        rsi, slope = safe_float(d.get("rsi_main"), 50.0), safe_float(d.get("rsi_slope"), 0.0)
 
-    def add_loss(self, symbol):
-        self.loss_streak[symbol] = self.loss_streak.get(symbol, 0) + 1
+        # 1. Momentum Check (Priority)
+        if self.momentum:
+            m_sig = self.momentum.evaluate_futures(d, market_regime="trend" if adx > 20 else "range")
+            if m_sig.active and m_sig.confirmed:
+                if macro_filter == "block_longs" and m_sig.side == "LONG": pass
+                else: return self._result(should_open=True, signal=m_sig.side, score=m_sig.score, setup_type=m_sig.setup_type, args=[m_sig.reason], threshold=thresh)
 
-    def reset_streak(self, symbol):
-        self.loss_streak[symbol] = 0
+        # 2. Hard Blocks
+        if adx < 15: return self._result(blocked_reason=f"flat market (ADX:{adx})", threshold=thresh)
+        if d.get("wick_long_danger") and slope < -0.1: return self._result(blocked_reason="wick rejection", threshold=thresh)
 
-    def get_streak(self, symbol):
-        return self.loss_streak.get(symbol, 0)
+        # 3. Standard Scoring
+        score = 0
+        args = [f"ADX:{adx}"]
+        if adx > 28: score += 2; args.append("trend strength ok")
+        if d.get("trend_4h") == "up": score += 3; args.append("4H Trend Up")
+        if rsi > 50: score += 1; args.append("RSI Bullish")
+        if slope > 0.3: score += 1; args.append("RSI Slope Up")
+        if safe_float(d.get("vol_ratio")) > 1.15: score += 1; args.append("Volume OK")
 
-    def _calc_tp_sl(self, data, side):
-        price = data["last_price"]
-        atr   = data["atr"]
-        sup   = data["support"]
-        res   = data["resistance"]
+        signal = "LONG" if score >= thresh else None
+        if signal == "LONG" and macro_filter == "block_longs":
+            return self._result(should_open=False, signal="LONG", score=score, blocked_reason="macro filter", threshold=thresh)
 
-        # SL: ATR×2 за уровнем
-        if side == "long":
-            sl_level = sup if sup > 0 else price - atr * 2
-            sl = min(sl_level - atr * 0.5, price - atr * 2)
-            tp1 = price + atr * 3
-            tp2 = res if res > tp1 else price + atr * 5
+        should_open = signal is not None
+        return self._result(should_open=should_open, signal=signal, score=score, setup_type="trend_follow_v1.7", args=args, threshold=thresh)
+
+    def analyze_spot(self, current, macro_filter="allow_all"):
+        res = self.analyze_futures(current, macro_filter)
+        if res.get("signal") == "SHORT": res["should_open"] = False; res["signal"] = None
+        return res
+
+    
+    def calculate_futures_trade(self, price, side, atr, setup_type="", args_text=""):
+        price = float(price)
+        atr = float(atr)
+        
+        # Гибридный подход: Микро-тейк (TP0), Основной (TP1), Туземун (TP2)
+        if side.lower() == "long":
+            tp0 = price + (atr * 0.6)
+            tp = price + (atr * 2.0)
+            tp2 = price + (atr * 3.5)
+            sl = price - (atr * 1.5)
         else:
-            sl_level = res if res > 0 else price + atr * 2
-            sl = max(sl_level + atr * 0.5, price + atr * 2)
-            tp1 = price - atr * 3
-            tp2 = sup if sup > 0 and sup < tp1 else price - atr * 5
+            tp0 = price - (atr * 0.6)
+            tp = price - (atr * 2.0)
+            tp2 = price - (atr * 3.5)
+            sl = price + (atr * 1.5)
+            
+        return {
+            "price": round(price, 8),
+            "qty": 0,  # Будет рассчитано в Risk Manager
+            "leverage": 3.0,
+            "tp0": round(tp0, 8), # Фронт-лоад тейк
+            "tp": round(tp, 8),   # Основной
+            "tp2": round(tp2, 8), # Дальний
+            "sl": round(sl, 8),
+            "atr": round(atr, 8),
+            "setup_type": setup_type,
+            "args_text": args_text
+        }
 
-        return round(tp1, 6), round(tp2, 6), round(sl, 6)
+    
+    def calculate_spot_ladder(self, price, atr, setup_type="", args_text=""):
+        price = float(price)
+        atr = float(atr)
+        return {
+            "price": round(price, 8),
+            "qty": 0,
+            "tp": round(price + (atr * 3.0), 8),
+            "atr": round(atr, 8),
+            "setup_type": setup_type,
+            "args_text": args_text
+        }
 
-    def analyze_futures(self, data, symbol, macro_filter="allow_all"):
-        if self.is_cooling_down(symbol):
-            cd_left = int((self.cooldowns[symbol] - time.time()) / 60)
-            return {"signal": "neutral", "score": 0,
-                    "args_text": f"⏳ Остывание {cd_left}м"}
-
-        last = data.get("last_price", 0)
-        if not last:
-            return {"signal": "neutral", "score": 0, "args_text": "Нет цены"}
-
-        # фильтр флэта
-        if data.get("atr_pct", 0) < 0.3:
-            return {"signal": "neutral", "score": 0, "args_text": "Sc:0 | Флэт"}
-
-        score = 0
-        args  = []
-        side  = "neutral"
-
-        trend_4h      = data.get("trend_4h", "ranging")
-        rsi           = data.get("rsi", 50)
-        vol_ratio     = data.get("vol_ratio", 1.0)
-        vol_spike     = data.get("vol_spike", False)
-        breakout      = data.get("breakout", False)
-        breakout_dir  = data.get("breakout_dir", "none")
-        near_support  = data.get("near_support", False)
-        near_res      = data.get("near_resistance", False)
-        rising_no_vol = data.get("rising_no_vol", False)
-        imb           = data.get("imbalance", 1.0)
-        dist_res      = data.get("dist_to_res_pct", 999)
-
-        # после 3 стопов подряд — пауза 4ч
-        if self.get_streak(symbol) >= 3:
-            self.set_cooldown(symbol, hours=4)
-            self.loss_streak[symbol] = 0
-            return {"signal": "neutral", "score": 0,
-                    "args_text": "🛑 Пауза после 3 стопов"}
-
-        # ══════════ ЛОНГ ══════════
-        # 1. Главный фильтр: тренд 4H вверх
-        if trend_4h == "uptrend":
-            score += 2
-            args.append("4H ↑")
-            side = "long"
-
-        # 2. Пробой уровня вверх с объёмом — сильный сигнал
-        if breakout and breakout_dir == "up":
-            score += 3
-            args.append("Пробой ↑")
-            side = "long"
-
-        # 3. RSI не перекуплен
-        if side == "long":
-            if rsi < 35:
-                score += 2; args.append(f"RSI перепродан {rsi}")
-            elif rsi < 60:
-                score += 1; args.append(f"RSI {rsi}")
-            elif rsi > 75:
-                score -= 1  # перекуплен — снижаем score
-
-        # 4. Объём подтверждает
-        if vol_spike:
-            score += 2; args.append(f"Объём ×{vol_ratio:.1f}")
-        elif vol_ratio > 1.2:
-            score += 1; args.append(f"Объём ×{vol_ratio:.1f}")
-
-        # 5. Стакан
-        if imb > 1.4:
-            score += 1; args.append("Bid стенка")
-
-        # 6. У поддержки — хорошая точка входа
-        if near_support and side == "long":
-            score += 1; args.append("У поддержки")
-
-        # не входим если до сопротивления < 0.5%
-        if side == "long" and dist_res < 0.5:
-            return {"signal": "neutral", "score": score,
-                    "args_text": f"Sc:{score} | Близко к сопр."}
-
-        # ══════════ ШОРТ ══════════
-        if trend_4h == "downtrend" and side == "neutral":
-            score += 2; args.append("4H ↓"); side = "short"
-
-        if breakout and breakout_dir == "down" and side == "neutral":
-            score += 3; args.append("Пробой ↓"); side = "short"
-
-        # рост без объёма — слабость = шорт
-        if rising_no_vol and side == "neutral":
-            score += 2; args.append("Рост без объёма ⚠️"); side = "short"
-
-        if side == "short":
-            if rsi > 70:
-                score += 2; args.append(f"RSI перекуплен {rsi}")
-            elif rsi > 55:
-                score += 1; args.append(f"RSI {rsi}")
-            if vol_spike:
-                score += 1; args.append(f"Объём ×{vol_ratio:.1f}")
-            if imb < 0.6:
-                score += 1; args.append("Ask стенка")
-            if near_res:
-                score += 1; args.append("У сопротивления")
-
-        # блокировки оракула
-        if side == "long" and macro_filter == "block_longs":
-            return {"signal": "neutral", "score": score,
-                    "args_text": f"Sc:{score} | 🚫 Блок Long"}
-        if side == "short" and macro_filter == "block_shorts":
-            return {"signal": "neutral", "score": score,
-                    "args_text": f"Sc:{score} | 🚫 Блок Short"}
-
-        if score >= 4 and side != "neutral":
-            tp1, tp2, sl = self._calc_tp_sl(data, side)
-            return {
-                "signal":      side,
-                "score":       score,
-                "take_profit": tp1,
-                "take_profit2":tp2,
-                "stop_loss":   sl,
-                "leverage":    3,
-                "args_text":   f"Sc:{score} | " + " + ".join(args[:4]),
-            }
-
-        return {"signal": "neutral", "score": score,
-                "args_text": f"Sc:{score} | " + (" + ".join(args[:3]) if args else "Ожидание...")}
-
-    def analyze_spot(self, data, symbol, macro_filter="allow_all"):
-        last = data.get("last_price", 0)
-        if not last:
-            return {"signal": "neutral", "score": 0, "args_text": "Нет цены"}
-
-        score = 0
-        args  = []
-
-        trend_4h     = data.get("trend_4h", "ranging")
-        rsi          = data.get("rsi", 50)
-        vol_ratio    = data.get("vol_ratio", 1.0)
-        vol_spike    = data.get("vol_spike", False)
-        breakout     = data.get("breakout", False)
-        breakout_dir = data.get("breakout_dir", "none")
-        near_support = data.get("near_support", False)
-        imb          = data.get("imbalance", 1.0)
-        support      = data.get("support", 0)
-        resistance   = data.get("resistance", 0)
-        atr          = data.get("atr", last * 0.001)
-
-        if trend_4h == "uptrend":
-            score += 2; args.append("4H ↑")
-
-        if breakout and breakout_dir == "up":
-            score += 3; args.append("Пробой ↑")
-
-        if rsi < 35:
-            score += 2; args.append(f"RSI перепродан {rsi}")
-        elif rsi < 55:
-            score += 1; args.append(f"RSI {rsi}")
-
-        if vol_spike:
-            score += 2; args.append(f"Объём ×{vol_ratio:.1f}")
-        elif vol_ratio > 1.2:
-            score += 1; args.append(f"Объём ×{vol_ratio:.1f}")
-
-        if imb > 1.2:
-            score += 1; args.append("Bid поддержка")
-
-        if near_support:
-            score += 1; args.append("У поддержки")
-
-        if score >= 4:
-            if macro_filter == "block_longs":
-                return {"signal": "neutral", "score": score,
-                        "args_text": f"Sc:{score} | 🚫 Блок Спот"}
-
-            tp1 = last + atr * 4
-            tp2 = resistance if resistance > tp1 else last + atr * 7
-            sl  = support - atr * 0.5 if support > 0 else last - atr * 2
-
-            # лесенка DCA: 20% сразу, +40% на -1%, +40% на -2%
-            orders = [
-                {"size_pct": 20, "price": last},
-                {"size_pct": 40, "price": round(last * 0.99, 6)},
-                {"size_pct": 40, "price": round(last * 0.98, 6)},
-            ]
-            return {
-                "signal":       "long_dca",
-                "score":        score,
-                "orders":       orders,
-                "take_profit":  round(tp1, 6),
-                "take_profit2": round(tp2, 6),
-                "stop_loss":    round(sl, 6),
-                "args_text":    f"Sc:{score} | " + " + ".join(args[:4]),
-            }
-
-        return {"signal": "neutral", "score": score,
-                "args_text": f"Sc:{score} | " + (" + ".join(args[:3]) if args else "Поиск...")}
+def apply_exchange_intel_filters_to_analysis(ans, ex=None): return ans
