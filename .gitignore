@@ -11,3 +11,7 @@ server.log
 server.log
 vortex.log
 *.tar.gz
+*.log
+server.log
+vortex.log
+*.tar.gz

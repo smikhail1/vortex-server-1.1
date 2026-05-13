@@ -103,7 +103,6 @@ class MarketScreener:
         lists.sort(key=len, reverse=True)
         return lists[0]
 
-
     async def _fetch_bitget_futures_tickers(self) -> List[dict]:
         attempts = [
             ("https://api.bitget.com/api/v2/mix/market/tickers", {"productType": "USDT-FUTURES"}),
@@ -127,7 +126,6 @@ class MarketScreener:
                 pass
         return []
 
-
     async def _fetch_bitget_spot_tickers(self) -> List[dict]:
         payload = await self._fetch_json("https://api.bitget.com/api/v2/spot/market/tickers")
         return self._extract_payload_items(payload, "spot")
@@ -139,7 +137,6 @@ class MarketScreener:
             if sym.endswith(suffix):
                 sym = sym[: -len(suffix)]
         return sym
-
 
     def _price_from_item(self, item: dict) -> float:
         return safe_float(
@@ -165,8 +162,6 @@ class MarketScreener:
         if price > 0 and base_volume > 0:
             return base_volume * price
         return 0.0
-
-
 
     def _high_from_item(self, item: dict, price: float) -> float:
         return safe_float(item.get("high24h") or item.get("high24") or item.get("high") or item.get("highPrice"), price)
@@ -228,49 +223,6 @@ class MarketScreener:
             return None, "blacklisted"
         if not self._is_tradable_symbol(symbol):
             return None, "not_tradable_symbol"
-
-        price = self._price_from_item(item)
-        if price < self.min_last_price or price > self.max_last_price:
-            return None, "price_filter"
-
-        quote_volume = self._quote_volume_from_item(item)
-        if quote_volume < self.min_quote_volume_usdt:
-            return None, "volume_filter"
-
-        high = self._high_from_item(item, price)
-        low = self._low_from_item(item, price)
-        if high <= 0 or low <= 0 or high < low:
-            return None, "bad_range"
-
-        mid = max(price, (high + low) / 2.0)
-        range_pct = ((high - low) / mid * 100.0) if mid > 0 else 0.0
-        if range_pct < self.min_24h_range_pct:
-            return None, "range_too_low"
-        if range_pct > self.max_24h_range_pct:
-            return None, "range_too_high"
-
-        change_pct = self._change_from_item(item)
-        if abs(change_pct) < self.min_24h_change_abs_pct and symbol not in {"BTCUSDT", "ETHUSDT", "SOLUSDT"}:
-            return None, "change_too_low"
-
-        vol_ratio_24h = max(0.1, min(5.0, quote_volume / max(1.0, self.min_quote_volume_usdt)))
-        rank_score = self._rank_score(quote_volume, range_pct, change_pct)
-
-        candidate = {
-            "symbol": symbol,
-            "market": market,
-            "price": round(price, 8),
-            "quote_volume": round(quote_volume, 2),
-            "high_24h": round(high, 8),
-            "low_24h": round(low, 8),
-            "range_pct": round(range_pct, 4),
-            "change_pct": round(change_pct, 4),
-            "vol_ratio": round(vol_ratio_24h, 4),
-            "vol_ratio_24h": round(vol_ratio_24h, 4),
-            "rank_score": round(rank_score, 4),
-        }
-        return candidate, "accepted"
-
 
         price = self._price_from_item(item)
         if price < self.min_last_price or price > self.max_last_price:
@@ -435,7 +387,7 @@ class MarketScreener:
                     self.logger.error("SCREENER", "refresh failed; fallback used", {"error": str(exc)})
                 except Exception:
                     pass
-        # v1.6.6 futures validator integration
+
         try:
             validator = getattr(self, "futures_validator", None) or FuturesSymbolValidator(logger=self.logger)
             validated_fut_symbols, validator_debug = await validator.filter_valid_symbols(
@@ -494,36 +446,6 @@ class MarketScreener:
                 "spot_debug": {"selected_count": spot_debug.get("selected_count", 0), "source_count": spot_debug.get("source_count", 0), "reject_counts": spot_debug.get("reject_counts", {}), "source": spot_debug.get("source", source), "fallback_reason": spot_debug.get("fallback_reason", "")},
             })
         return {"fut": list(fut_symbols), "spot": list(spot_symbols)}
-
-
-        summary = {
-            "fut_count": len(fut_symbols),
-            "spot_count": len(spot_symbols),
-            "dynamic_enabled": self.dynamic_enabled,
-            "top_n": self.top_n,
-            "min_quote_volume_usdt": self.min_quote_volume_usdt,
-            "min_24h_range_pct": self.min_24h_range_pct,
-            "min_24h_change_abs_pct": self.min_24h_change_abs_pct,
-            "blacklisted_symbols": sorted(list(self.blacklisted_symbols)),
-        }
-
-        async with self._lock:
-            self.cache_futures = list(fut_symbols)
-            self.cache_spot = list(spot_symbols)
-            self.metrics_futures = dict(fut_metrics)
-            self.metrics_spot = dict(spot_metrics)
-            self.last_refresh_ts = time.time()
-            self.last_source = source
-            self.last_debug = {"futures": fut_debug, "spot": spot_debug, "summary": summary}
-
-        if self.logger:
-            self.logger.info("SCREENER", "market buckets updated", {
-                "fut_candidates": fut_symbols,
-                "spot_candidates": spot_symbols,
-                "fut_debug": {"selected_count": fut_debug.get("selected_count", 0), "reject_counts": fut_debug.get("reject_counts", {})},
-                "spot_debug": {"selected_count": spot_debug.get("selected_count", 0), "reject_counts": spot_debug.get("reject_counts", {})},
-            })
-        return {"fut": fut_symbols, "spot": spot_symbols}
 
     async def refresh(self) -> List[str]:
         buckets = await self.refresh_market_buckets()

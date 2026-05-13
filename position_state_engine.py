@@ -54,6 +54,7 @@ class PositionStateEngine:
         self.max_events = int(CONFIG.position_state.max_events_per_position)
         self.max_closed = int(CONFIG.position_state.max_closed_positions)
         self._storage_file = 'trades_state.json'
+        self._tmp_file = 'trades_state.json.tmp'
         self._open: Dict[str, PositionState] = {}
         self._closed: List[PositionState] = []
         self._load_from_disk()
@@ -64,8 +65,10 @@ class PositionStateEngine:
                 "open": {k: asdict(v) for k, v in self._open.items()},
                 "closed": [asdict(v) for v in self._closed[-self.max_closed:]]
             }
-            with open(self._storage_file, 'w') as f:
+            # Атомарная запись для предотвращения повреждения JSON при краше
+            with open(self._tmp_file, 'w') as f:
                 json.dump(data, f, indent=2)
+            os.replace(self._tmp_file, self._storage_file)
         except Exception as e:
             if self.logger: self.logger.error("STATE_ENGINE", "Save failed", {"err": str(e)})
 
@@ -80,7 +83,7 @@ class PositionStateEngine:
                 self._open[k] = PositionState(**v, events=events)
             if self.logger: self.logger.info("STATE_ENGINE", "State restored from disk", {"open": len(self._open)})
         except Exception as e:
-            if self.logger: self.logger.error("STATE_ENGINE", "Load failed", {"err": str(e)})
+            if self.logger: self.logger.error("STATE_ENGINE", "Load failed (JSON corrupted?)", {"err": str(e)})
 
     def _make_trade_id(self, symbol, market, side, open_time):
         return f"{normalize_symbol(symbol)}-{safe_str(market).upper()}-{safe_str(side).upper()}-{int(open_time)}"
