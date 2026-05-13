@@ -7,3 +7,7 @@ vortex.log
 server.log
 *.log
 *.tar.gz
+*.log
+server.log
+vortex.log
+*.tar.gz

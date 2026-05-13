@@ -498,7 +498,8 @@ async def strategy_loop(
                         setup_type=analysis.get("setup_type"),
                     )
 
-                    qty = CONFIG.trading.futures_margin_usdt / price
+                    notional_size = CONFIG.trading.futures_margin_usdt * ladder.get("leverage", 3.0)
+                    qty = notional_size / price
 
                     result = {"code": "LOCKED_NOT_RUN"}
                     opened = False
@@ -535,10 +536,12 @@ async def strategy_loop(
                                     side=side,
                                     qty=qty,
                                     price=price,
-                                    tp=ladder["tp"],
-                                    sl=ladder["sl"],
+                                    tp0=ladder.get("tp0"),
+                                    tp=ladder.get("tp"),
+                                    tp2=ladder.get("tp2"),
+                                    sl=ladder.get("sl"),
                                     atr=atr_abs,
-                                    leverage=ladder["leverage"],
+                                    leverage=ladder.get("leverage", 3.0),
                                     setup_type=safe_str(analysis.get("setup_type")),
                                     args_text=safe_str(analysis.get("args_text")),
                                 )

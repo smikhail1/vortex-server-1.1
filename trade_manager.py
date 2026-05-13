@@ -105,7 +105,7 @@ class TradeManager:
 
     async def _get_futures_price(self, symbol: str, snapshot: Dict[str, Any]) -> float:
         c = self._get_cached_state_price(symbol, snapshot)
-        l = await self._fetch_bitget_futures_price(symbol)
+        l = 0.0  # [FIX] Запрос отключен. Цена берется безопасно из кэша StateManager
         if l > 0:
             if c > 0 and (abs(l - c) / c * 100.0) >= 1.0:
                 now = time.time()
