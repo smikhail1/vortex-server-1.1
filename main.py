@@ -62,7 +62,6 @@ async def pool_loop(state, screener, logger=None) -> None:
             now = time.time()
 
             if now >= next_rotation:
-                # First refresh dynamic screener.
                 if hasattr(screener, "refresh_market_buckets"):
                     buckets = await screener.refresh_market_buckets()
                 else:
@@ -72,8 +71,6 @@ async def pool_loop(state, screener, logger=None) -> None:
                         "spot": [],
                     }
 
-                # VORTEX 1.5 contract:
-                # MarketScreener returns {"fut": [...], "spot": [...]}
                 fut = list(buckets.get("fut", []))[: CONFIG.universe.fut_pool_size]
                 spot = list(buckets.get("spot", []))[: CONFIG.universe.spot_pool_size]
 
@@ -269,6 +266,10 @@ async def strategy_loop(
             fut_pool = dash.get("system", {}).get("fut_pool", [])
             spot_pool = dash.get("system", {}).get("spot_pool", [])
             macro_filter = dash.get("system", {}).get("macro", {}).get("global_filter", "allow_all")
+            
+            # ИНТЕГРАЦИЯ ПЛАНЕРА ДЛЯ СПОТА
+            planner_state = dash.get("planner", {}).get("spot_planner", {}) or {}
+            planner_map = {x.get("symbol"): x for x in planner_state.get("spot_ideas", []) if isinstance(x, dict)}
 
             ta_data = _enrich_ta_data_with_screener(
                 ta_data,
@@ -278,8 +279,6 @@ async def strategy_loop(
 
             risk_status = risk_manager.get_status()
 
-            # v1.6.10: throttle repetitive cooldown-prefilter logs per symbol.
-            # Stored on function object to avoid global state and keep patch small.
             if not hasattr(strategy_loop, "_cooldown_prefilter_log_ts"):
                 strategy_loop._cooldown_prefilter_log_ts = {}
 
@@ -304,7 +303,7 @@ async def strategy_loop(
             current_fut_open_count = 1 if router.get_futures_position() is not None else 0
             current_spot_open_count = len(router.get_all_spot_positions())
 
-            # 1) Scan futures: strategy signal now goes to WATCH, not directly to OPEN.
+            # 1) Scan futures
             for sym in fut_pool:
                 current = ta_data.get(sym)
 
@@ -314,15 +313,12 @@ async def strategy_loop(
                 analysis = strategy.analyze_futures(current, macro_filter)
 
                 if analysis.get("should_open"):
-                    # v1.6.9: cooldown prefilter.
-                    # Do not recreate a futures watch item if RiskManager already says this symbol is cooling down.
                     try:
                         can_preopen, preopen_reason = risk_manager.can_open(sym, "fut")
                     except Exception:
                         can_preopen, preopen_reason = True, ""
 
                     if (not can_preopen) and "cooldown after open" in safe_str(preopen_reason, "").lower():
-                        # v1.6.10: log this skip only occasionally, otherwise logs are spammed every strategy tick.
                         try:
                             _now = time.time()
                             _key = f"{sym}::fut"
@@ -370,7 +366,7 @@ async def strategy_loop(
                             "signal": analysis.get("signal"),
                         })
 
-            # 2) Confirm futures: only confirmed WATCH candidates are allowed to open.
+            # 2) Confirm futures
             try:
                 current_fut_open_count = len(router.get_all_futures_positions())
             except Exception:
@@ -393,7 +389,6 @@ async def strategy_loop(
                     except Exception:
                         pass
 
-                    # v1.6.5.0: confirmed watch item is source of truth for execution.
                     side = safe_str(item.get("side")).upper()
                     analysis = {
                         "should_open": True,
@@ -437,9 +432,6 @@ async def strategy_loop(
                                 "watch": item,
                             })
 
-                        # v1.6.8: cooldown cleanup.
-                        # If a ready watch item is blocked only by symbol cooldown, remove it from watchlist.
-                        # Otherwise it will spam the log every strategy tick until the cooldown expires.
                         if "cooldown after open" in reason.lower():
                             try:
                                 watch_engine.remove(sym, "fut", side)
@@ -498,8 +490,7 @@ async def strategy_loop(
                         setup_type=analysis.get("setup_type"),
                     )
 
-                    notional_size = CONFIG.trading.futures_margin_usdt * ladder.get("leverage", 3.0)
-                    qty = notional_size / price
+                    qty = CONFIG.trading.futures_margin_usdt / price
 
                     result = {"code": "LOCKED_NOT_RUN"}
                     opened = False
@@ -612,7 +603,8 @@ async def strategy_loop(
                 if not current:
                     continue
 
-                analysis = strategy.analyze_spot(current, macro_filter)
+                # ИНТЕГРАЦИЯ ПЛАНЕРА ДЛЯ АНАЛИЗА
+                analysis = strategy.analyze_spot(current, macro_filter, planner_idea=planner_map.get(sym))
 
                 if analysis.get("should_open"):
                     item = watch_engine.upsert_from_analysis(
@@ -655,8 +647,9 @@ async def strategy_loop(
 
                     if not current:
                         continue
-
-                    analysis = strategy.analyze_spot(current, macro_filter)
+                        
+                    # ИНТЕГРАЦИЯ ПЛАНЕРА ДЛЯ ПОДТВЕРЖДЕНИЯ
+                    analysis = strategy.analyze_spot(current, macro_filter, planner_idea=planner_map.get(sym))
 
                     decision = decision_engine.evaluate(
                         symbol=sym,
@@ -699,14 +692,16 @@ async def strategy_loop(
                         setup_type=analysis.get("setup_type"),
                     )
 
-                    order_usdt = CONFIG.trading.spot_order_usdt * CONFIG.trading.spot_entry_1_pct
+                    # ИНТЕГРАЦИЯ ПЛАНЕРА ДЛЯ TP И ФИКСАЦИЯ НА 10 USDT
+                    tp = safe_float(analysis.get("tp_base")) if analysis.get("setup_type") == "planner_spot" else ladder["tp"]
+                    order_usdt = 10.0  # Фиксированный объем 10 USDT для спота
                     qty = order_usdt / price
 
                     result = router.open_spot_position(
                         symbol=sym,
                         qty=qty,
                         price=price,
-                        tp=ladder["tp"],
+                        tp=tp,
                         atr=atr_abs,
                         setup_type=safe_str(analysis.get("setup_type")),
                         args_text=safe_str(analysis.get("args_text")),
@@ -731,7 +726,7 @@ async def strategy_loop(
                                 "setup_type": analysis.get("setup_type"),
                                 "price": price,
                                 "score": analysis.get("score"),
-                                "tp": ladder["tp"],
+                                "tp": tp,
                                 "order_usdt": order_usdt,
                                 "watch": item,
                             })
@@ -741,7 +736,7 @@ async def strategy_loop(
                             side="BUY",
                             market="SPOT",
                             entry=result["data"]["entry"],
-                            tp=ladder["tp"],
+                            tp=tp,
                             exit_price=0.0,
                             pnl=0.0,
                             pnl_net=0.0,
@@ -792,7 +787,6 @@ async def trade_manager_loop(state, router, trade_manager, trade_logger, risk_ma
 
 
 async def exchange_intel_loop(session, state, logger, exchange_intel):
-    """v1.6.4: update OI/Funding context for current futures pool."""
     while True:
         try:
             dash = await state.get_dashboard() if hasattr(state, "get_dashboard") else {}
@@ -808,6 +802,7 @@ async def exchange_intel_loop(session, state, logger, exchange_intel):
             if logger:
                 logger.warning("EX_INTEL", "exchange intelligence loop error", {"error": str(exc)[:240]})
         await asyncio.sleep(int(getattr(getattr(CONFIG, "exchange_intel", None), "update_sec", 60)))
+
 
 async def main() -> None:
     logger = Logger()

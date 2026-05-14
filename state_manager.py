@@ -40,7 +40,7 @@ class StateManager:
                 "macro": {"btc_trend": "neutral", "global_filter": "allow_all", "binance_btc": 0.0, "funding_rates": {}},
                 "rotation_timer": 0, "sys_logs": [], "uptime": "00:00:00",
             },
-            "planner": {"market_data": {}, "ideas": []},
+            "planner": {"market_data": {}, "ideas": [], "spot_planner": {}},
             "terminal": {"watchlist_mini": []},
         }
         self._initialized = True
@@ -51,7 +51,6 @@ class StateManager:
             return copy.deepcopy(self.state)
 
     async def get_runtime_snapshot(self) -> Dict[str, Any]:
-        """Этот метод кормит curl и монитор."""
         async with self._lock:
             res = copy.deepcopy(self.state)
             uptime_sec = int(time.time() - self._started_ts)
@@ -70,7 +69,6 @@ class StateManager:
             self.state["market"]["last_market_update_ts"] = safe_float(ts, time.time())
 
     async def update_ta_data(self, ta_map: Dict[str, Dict[str, Any]]) -> None:
-        """ФИКС: Обновляем данные и принудительно ставим метку времени."""
         async with self._lock:
             self.state["market"]["ta_data"] = ta_map
             self.state["market"]["last_ta_update_ts"] = time.time()
@@ -80,7 +78,6 @@ class StateManager:
             self.state["terminal"]["watchlist_mini"] = items
 
     async def get_health_state(self, mode: Optional[str] = None) -> Dict[str, Any]:
-        """ФИКС: Расчет возраста данных для терминала BlueStacks."""
         async with self._lock:
             now = time.time()
             lm = self.state["market"].get("last_market_update_ts", 0.0)
@@ -107,18 +104,29 @@ class StateManager:
         line = f"{time.strftime('%H:%M:%S')} {tag} {message}"
         async with self._lock: self._sys_logs.appendleft(line)
 
-    # Остальные методы-заглушки для совместимости с main.py
     async def set_pool(self, m, s):
         async with self._lock: self.state["system"][f"{m}_pool"] = s
+        
     async def set_mode(self, m):
         async with self._lock: self.state["meta"]["mode"] = m.upper()
+        
     async def update_timer(self, s):
         async with self._lock: self.state["system"]["rotation_timer"] = s
+        
     async def update_system_metrics(self, u, r, p): pass
-    async def update_planner_market_data(self, s): pass
-    async def update_spot_planner(self, p): pass
+
+    # [ФИКС] Убираем pass и сохраняем данные Планера в стейт
+    async def update_planner_market_data(self, s):
+        async with self._lock:
+            self.state["planner"]["market_data"] = s
+
+    async def update_spot_planner(self, p):
+        async with self._lock:
+            self.state["planner"]["spot_planner"] = p
+            self.state["planner"]["ideas"] = p.get("ideas", [])
+
     async def get_pool(self, m): return self.state["system"].get(f"{m}_pool", [])
-    async def get_spot_planner_state(self): return self.state["planner"]
+    async def get_spot_planner_state(self): return self.state["planner"].get("spot_planner", self.state["planner"])
     async def replace_state(self, n): pass
     async def clear_sys_logs(self): pass
     async def set_symbol_health(self, s, p): pass

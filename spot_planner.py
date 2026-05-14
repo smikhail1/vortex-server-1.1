@@ -81,16 +81,16 @@ class SpotPlannerEngine:
         return "Выше зоны"
 
     def _score_symbol(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
-        d1 = metrics["d1"]
-        w1 = metrics["w1"]
-        h4 = metrics["h4"]
+        d1 = metrics.get("d1", {})
+        w1 = metrics.get("w1", {})
+        h4 = metrics.get("h4", {})
 
         score = 0
         reasons: List[str] = []
 
-        trend_d1 = self._trend_label(d1["price"], d1["ema20"], d1["ema50"])
-        trend_w1 = self._trend_label(w1["price"], w1["ema20"], w1["ema50"])
-        structure_4h = self._structure_label(h4["price"], h4["recent_high"], h4["recent_low"])
+        trend_d1 = self._trend_label(safe_float(d1.get("price")), safe_float(d1.get("ema20")), safe_float(d1.get("ema50")))
+        trend_w1 = self._trend_label(safe_float(w1.get("price")), safe_float(w1.get("ema20")), safe_float(w1.get("ema50")))
+        structure_4h = self._structure_label(safe_float(h4.get("price")), safe_float(h4.get("recent_high")), safe_float(h4.get("recent_low")))
 
         if trend_d1 == "uptrend":
             score += 25
@@ -172,14 +172,21 @@ class SpotPlannerEngine:
         ]
 
     def _build_idea(self, symbol: str, payload: Dict[str, Any], macro: Dict[str, Any], rank: int) -> Dict[str, Any]:
-        metrics = payload["metrics"]
-        d1 = metrics["d1"]
-        w1 = metrics["w1"]
-        h4 = metrics["h4"]
+        # [БЕЗОПАСНОЕ ИЗВЛЕЧЕНИЕ]
+        metrics = payload.get("metrics", payload)
+        d1 = metrics.get("d1", {})
+        w1 = metrics.get("w1", {})
+        h4 = metrics.get("h4", {})
+
+        if not d1 or not h4:
+            raise ValueError(f"Missing required timeframe data for {symbol}")
 
         scored = self._score_symbol(metrics)
 
         current_price = safe_float(payload.get("price"), 0.0)
+        if current_price <= 0:
+             current_price = safe_float(h4.get("price"), 0.0) # фоллбек
+
         atr = safe_float(h4.get("atr"), 0.0)
         atr_pct = safe_float(h4.get("atr_pct"), 0.0)
 
@@ -218,19 +225,19 @@ class SpotPlannerEngine:
 
         if ready:
             action_label = "Набор в зоне"
-            action_hint = "Цена в рабочей зоне. Можно набирать позицию лесенкой по плану."
+            action_hint = "Цена в рабочей зоне. Можно набирать позицию."
         elif readiness == "MID":
             action_label = "Подготовка к набору"
-            action_hint = "Цена рядом с зоной. Ждем аккуратного подхода к зоне или стабилизации."
+            action_hint = "Цена рядом с зоной. Ждем подхода."
         else:
             action_label = "Наблюдение"
-            action_hint = "Пока рано. Идея сильная, но цена еще не дошла до комфортной зоны."
+            action_hint = "Пока рано. Идея сильная, но цена еще не в зоне."
 
         expected_return_base_pct = ((targets[0]["price"] - avg_entry) / avg_entry) * 100 if avg_entry > 0 else 0.0
         expected_return_bull_pct = ((targets[2]["price"] - avg_entry) / avg_entry) * 100 if avg_entry > 0 else 0.0
 
         tier = "A" if scored["score"] >= 80 else ("B" if scored["score"] >= 68 else "C")
-        horizon = "Среднесрок 1–4 недели" if scored["trend_w1"] != "downtrend" else "Позиционно / наблюдение"
+        horizon = "Среднесрок 1–4 недели" if scored["trend_w1"] != "downtrend" else "Наблюдение"
 
         thesis = list(scored["reasons"])
         if blocked_reason:
@@ -321,7 +328,7 @@ class SpotPlannerEngine:
             "generated_at": generated_at,
             "last_update_ts": generated_at,
             "mode": "PLANNER",
-            "status": "ok" if ideas else "empty",
+            "status": "OK" if ideas else "EMPTY",
         }
 
         if self.logger:

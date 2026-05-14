@@ -44,9 +44,27 @@ class SwingStrategy:
         should_open = signal is not None
         return self._result(should_open=should_open, signal=signal, score=score, setup_type="trend_follow_v1.7", args=args, threshold=thresh)
 
-    def analyze_spot(self, current, macro_filter="allow_all"):
+    def analyze_spot(self, current, macro_filter="allow_all", planner_idea=None):
+        # ИНТЕГРАЦИЯ ПЛАНЕРА
+        if planner_idea and planner_idea.get("ready"):
+            return self._result(
+                should_open=True,
+                signal="BUY",
+                score=planner_idea.get("score", 80),
+                setup_type="planner_spot",
+                args=[f"Planner Tier {planner_idea.get('tier')}", str(planner_idea.get("action_hint"))],
+                threshold=0,
+                extra={
+                    "trigger_price": current.get("price", 0.0) * 0.9999, # Мгновенное подтверждение
+                    "invalidation_price": planner_idea.get("invalid_level", 0.0),
+                    "tp_base": planner_idea.get("tp_base", current.get("price", 0.0) * 1.1)
+                }
+            )
+            
         res = self.analyze_futures(current, macro_filter)
-        if res.get("signal") == "SHORT": res["should_open"] = False; res["signal"] = None
+        if res.get("signal") == "SHORT": 
+            res["should_open"] = False
+            res["signal"] = None
         return res
 
     
