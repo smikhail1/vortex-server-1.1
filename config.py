@@ -100,8 +100,8 @@ class TradingConfig:
     spot_entry_1_pct: float = 0.60
     spot_entry_2_pct: float = 0.40
     allow_manual_trades: bool = True
-    allow_force_close: bool = True
-    allow_risk_reset: bool = True
+    allow_force_close: bool = False
+    allow_risk_reset: bool = False
     debug_api_enabled: bool = True
 
 @dataclass(frozen=True)
@@ -110,7 +110,7 @@ class RiskConfig:
     spot_symbol_cooldown_sec: int = 1800
     max_trades_per_symbol_per_day: int = 5
     daily_loss_limit_usdt: float = -5.0
-    max_open_futures_positions: int = 2
+    max_open_futures_positions: int = 1  # audit-fix: PaperFutures currently supports one open futures position
     max_open_spot_positions: int = 5
     loss_streak_limit: int = 3
     loss_streak_cooldown_sec: int = 14400

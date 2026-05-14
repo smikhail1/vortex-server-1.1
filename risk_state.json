@@ -33,7 +33,7 @@
     "ZECUSDT::fut": 1,
     "ZECUSDT::spot": 0
   },
-  "daily_realized_pnl": -2.23439999,
+  "daily_realized_pnl": 0.0,
   "last_close_ts": {
     "AAVEUSDT::fut": 1778611101.524222,
     "COINUSDT::fut": 1778592643.196616,
@@ -115,5 +115,5 @@
     "ZECUSDT::fut": 1778643552.943821,
     "ZECUSDT::spot": 1778644187.629126
   },
-  "last_reset_day": "2026-05-13"
+  "last_reset_day": "2026-05-14"
 }

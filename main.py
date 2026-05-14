@@ -694,7 +694,7 @@ async def strategy_loop(
 
                     # ИНТЕГРАЦИЯ ПЛАНЕРА ДЛЯ TP И ФИКСАЦИЯ НА 10 USDT
                     tp = safe_float(analysis.get("tp_base")) if analysis.get("setup_type") == "planner_spot" else ladder["tp"]
-                    order_usdt = 10.0  # Фиксированный объем 10 USDT для спота
+                    order_usdt = CONFIG.trading.spot_order_usdt  # audit-fix: use config value
                     qty = order_usdt / price
 
                     result = router.open_spot_position(

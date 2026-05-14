@@ -30,6 +30,7 @@ class StateManager:
             "market": {
                 "prices": {}, 
                 "ta_data": {}, 
+                "symbol_health": {},
                 "last_market_update_ts": 0.0, 
                 "last_ta_update_ts": 0.0
             },
@@ -113,7 +114,11 @@ class StateManager:
     async def update_timer(self, s):
         async with self._lock: self.state["system"]["rotation_timer"] = s
         
-    async def update_system_metrics(self, u, r, p): pass
+    async def update_system_metrics(self, u, r, p):
+        async with self._lock:
+            self.state["system"]["uptime"] = safe_str(u, "00:00:00")
+            self.state["system"]["ram_mb"] = safe_float(r, 0.0)
+            self.state["system"]["ping_ms"] = safe_float(p, 0.0)
 
     # [ФИКС] Убираем pass и сохраняем данные Планера в стейт
     async def update_planner_market_data(self, s):
@@ -127,7 +132,64 @@ class StateManager:
 
     async def get_pool(self, m): return self.state["system"].get(f"{m}_pool", [])
     async def get_spot_planner_state(self): return self.state["planner"].get("spot_planner", self.state["planner"])
-    async def replace_state(self, n): pass
-    async def clear_sys_logs(self): pass
-    async def set_symbol_health(self, s, p): pass
-    def _serialize_position_object(self, p, m): return {"symbol": "N/A"}
+    async def replace_state(self, n):
+        if not isinstance(n, dict):
+            raise ValueError("state must be dict")
+        async with self._lock:
+            self.state = copy.deepcopy(n)
+            self.state.setdefault("meta", dict(DEFAULT_STATE_META))
+            self.state.setdefault("market", {})
+            self.state["market"].setdefault("prices", {})
+            self.state["market"].setdefault("ta_data", {})
+            self.state["market"].setdefault("symbol_health", {})
+            self.state["market"].setdefault("last_market_update_ts", 0.0)
+            self.state["market"].setdefault("last_ta_update_ts", 0.0)
+            self.state.setdefault("account", {"balances": {}})
+            self.state["account"].setdefault("balances", {})
+            self.state["account"]["balances"].setdefault("fut", float(CONFIG.futures.start_balance))
+            self.state["account"]["balances"].setdefault("spot", float(CONFIG.spot.start_balance))
+            self.state.setdefault("positions", {"fut": {}, "spot": {}})
+            self.state["positions"].setdefault("fut", {})
+            self.state["positions"].setdefault("spot", {})
+            self.state.setdefault("system", {})
+            self.state["system"].setdefault("sys_logs", [])
+            self.state.setdefault("planner", {"market_data": {}, "ideas": [], "spot_planner": {}})
+            self.state.setdefault("terminal", {"watchlist_mini": []})
+            self._sys_logs.clear()
+            for line in list(self.state["system"].get("sys_logs", []))[:CONFIG.logging.max_sys_logs]:
+                self._sys_logs.append(safe_str(line))
+    async def clear_sys_logs(self):
+        async with self._lock:
+            self._sys_logs.clear()
+            self.state["system"]["sys_logs"] = []
+    async def set_symbol_health(self, s, p):
+        sym = normalize_symbol(s)
+        payload = p if isinstance(p, dict) else {"status": safe_str(p, "UNKNOWN")}
+        async with self._lock:
+            self.state["market"].setdefault("symbol_health", {})
+            self.state["market"]["symbol_health"][sym] = payload
+    def _serialize_position_object(self, p, m):
+        if p is None:
+            return {}
+        if isinstance(p, dict):
+            data = dict(p)
+        else:
+            data = {}
+            for key in [
+                "symbol", "side", "qty", "entry", "avg_price", "mark_price",
+                "tp0", "tp", "tp1", "tp2", "sl", "trail_sl", "liq_price",
+                "atr", "leverage", "margin", "notional", "fee_open",
+                "fee_close_est", "pnl", "pnl_net", "max_pnl_net",
+                "tp0_hit", "tp1_hit", "breakeven", "last_event",
+                "open_time", "setup_type", "args_text", "fills_count",
+            ]:
+                if hasattr(p, key):
+                    data[key] = getattr(p, key)
+        data["market"] = safe_str(m).upper()
+        if "symbol" in data:
+            data["symbol"] = safe_str(data.get("symbol")).upper()
+        open_time = safe_float(data.get("open_time"), 0.0)
+        if open_time > 0:
+            import time
+            data["hold_sec"] = max(0, int(time.time() - open_time))
+        return data
