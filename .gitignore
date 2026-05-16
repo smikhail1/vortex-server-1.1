@@ -12,3 +12,7 @@ _updates/
 .env
 # VORTEX runtime files
 _runtime/
+_runtime/trade_snapshots.jsonl
+_runtime/*.jsonl
+_runtime/trade_outcomes.jsonl
+_runtime/outcome_summary.json
