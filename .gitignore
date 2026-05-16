@@ -16,3 +16,5 @@ _runtime/trade_snapshots.jsonl
 _runtime/*.jsonl
 _runtime/trade_outcomes.jsonl
 _runtime/outcome_summary.json
+
+_runtime/policy_recommendations.json
