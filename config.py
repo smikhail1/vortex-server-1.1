@@ -41,11 +41,11 @@ class UniverseConfig:
     refresh_sec: int = 30
     dynamic_enabled: bool = True
     dynamic_universe_enabled: bool = True
-    top_n: int = 100
-    fut_pool_size: int = 30
-    spot_pool_size: int = 20
+    top_n: int = 160  # v1.8.7 dynamic active pool
+    fut_pool_size: int = 60  # v1.8.7 dynamic active pool
+    spot_pool_size: int = 15  # v1.8.7 dynamic active pool
     # Поднимаем порог объема, чтобы отсечь неликвид:
-    min_quote_volume_usdt: float = 25_000_000.0
+    min_quote_volume_usdt: float = 3_000_000.0  # v1.8.7 dynamic active pool
     min_last_price: float = 0.01
     max_last_price: float = 1_000_000.0
     min_24h_range_pct: float = 0.8
@@ -69,10 +69,19 @@ class UniverseConfig:
     )
     fallback_symbols: List[str] = field(
         default_factory=lambda: [
-            "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-            "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOGEUSDT", "LTCUSDT",
-            "TRXUSDT", "DOTUSDT", "BCHUSDT", "NEARUSDT", "APTUSDT",
-            "ARBUSDT", "OPUSDT", "INJUSDT", "SUIUSDT", "SEIUSDT",
+            'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT',
+            'BNBUSDT', 'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'LTCUSDT',
+            'TRXUSDT', 'DOTUSDT', 'BCHUSDT', 'NEARUSDT', 'APTUSDT',
+            'ARBUSDT', 'OPUSDT', 'INJUSDT', 'SEIUSDT', 'ATOMUSDT',
+            'FILUSDT', 'ETCUSDT', 'AAVEUSDT', 'UNIUSDT', 'SANDUSDT',
+            'MANAUSDT', 'GALAUSDT', 'APEUSDT', 'PEOPLEUSDT', 'DYDXUSDT',
+            'GMTUSDT', 'CHZUSDT', 'CRVUSDT', 'ALGOUSDT', 'VETUSDT',
+            'ICPUSDT', 'EGLDUSDT', 'SUSHIUSDT', 'COMPUSDT', 'MKRUSDT',
+            'LDOUSDT', 'MAGICUSDT', 'CFXUSDT', 'STXUSDT', 'BLURUSDT',
+            'WLDUSDT', 'TIAUSDT', 'ORDIUSDT', 'JUPUSDT', 'PYTHUSDT',
+            'STRKUSDT', 'WIFUSDT', 'ENAUSDT', 'TONUSDT', 'ZECUSDT',
+            'HYPEUSDT', 'MUUSDT', 'CLUSDT', 'BILLUSDT', 'SNDKUSDT',
+            '1000PEPEUSDT', '1000SHIBUSDT', '1000FLOKIUSDT',
         ]
     )
     excluded_base_assets: List[str] = field(
@@ -93,6 +102,7 @@ class TradingConfig:
     futures_min_score_to_open: int = 7
     spot_min_score_to_open: int = 6
     watchlist_min_score: int = 6
+    watchlist_display_limit: int = 40  # v1.8.7 UI/active watchlist expansion
     futures_watch_ttl_sec: int = 21600
     spot_watch_ttl_sec: int = 172800
     futures_confirmation_buffer_atr: float = 0.18
@@ -110,7 +120,7 @@ class RiskConfig:
     spot_symbol_cooldown_sec: int = 1800
     max_trades_per_symbol_per_day: int = 5
     daily_loss_limit_usdt: float = -5.0
-    max_open_futures_positions: int = 1  # audit-fix: PaperFutures currently supports one open futures position
+    max_open_futures_positions: int = 1  # v1.8.1: PaperFutures currently supports one open futures position
     max_open_spot_positions: int = 5
     loss_streak_limit: int = 3
     loss_streak_cooldown_sec: int = 14400
@@ -253,12 +263,23 @@ class RegimeConfig:
 class PlannerConfig:
     enabled: bool = True
     max_ideas: int = 12
+    dynamic_universe_from_pool: bool = True  # v1.8.7b planner uses active pool
+    dynamic_universe_limit: int = 40  # v1.8.7b max symbols per planner snapshot
+    dynamic_universe_include_spot: bool = True  # v1.8.7b merge spot pool after futures
     snapshot_universe: List[str] = field(
         default_factory=lambda: [
-            "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-            "ADAUSDT", "LINKUSDT", "AVAXUSDT", "ARBUSDT", "OPUSDT",
-            "INJUSDT", "ATOMUSDT", "NEARUSDT", "IMXUSDT", "RNDRUSDT",
-            "FETUSDT", "SUIUSDT", "APTUSDT",
+            'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT',
+            'BNBUSDT', 'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'LTCUSDT',
+            'TRXUSDT', 'DOTUSDT', 'BCHUSDT', 'NEARUSDT', 'APTUSDT',
+            'ARBUSDT', 'OPUSDT', 'INJUSDT', 'SEIUSDT', 'ATOMUSDT',
+            'FILUSDT', 'ETCUSDT', 'AAVEUSDT', 'UNIUSDT', 'SANDUSDT',
+            'MANAUSDT', 'GALAUSDT', 'APEUSDT', 'PEOPLEUSDT', 'DYDXUSDT',
+            'GMTUSDT', 'CHZUSDT', 'CRVUSDT', 'ALGOUSDT', 'VETUSDT',
+            'ICPUSDT', 'EGLDUSDT', 'SUSHIUSDT', 'COMPUSDT', 'MKRUSDT',
+            'LDOUSDT', 'CFXUSDT', 'STXUSDT', 'BLURUSDT', 'WLDUSDT',
+            'TIAUSDT', 'ORDIUSDT', 'JUPUSDT', 'PYTHUSDT', 'STRKUSDT',
+            'WIFUSDT', 'ENAUSDT', 'TONUSDT', 'ZECUSDT', 'HYPEUSDT',
+            'SUIUSDT', 'MUUSDT', 'CLUSDT', 'SNDKUSDT',
         ]
     )
 

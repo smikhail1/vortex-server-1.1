@@ -5,6 +5,7 @@ from api_server import APIServer
 from config import CONFIG
 from exchange_intelligence import ExchangeIntelligenceService
 from decision_engine import DecisionEngine
+from defensive_gates import DefensiveGates
 from execution_router import ExecutionRouter
 from logger import Logger
 from loop_runner import create_task
@@ -22,6 +23,7 @@ from ta_service import TAService
 from trade_manager import TradeManager
 from watch_engine import WatchEngine
 from watchlist_builder import WatchlistBuilder
+from confirmation_engine import ConfirmationEngine
 from validators import safe_float, safe_str
 
 
@@ -155,6 +157,65 @@ async def sync_router_loop(state, router, logger=None) -> None:
 async def planner_market_loop(state, provider, logger=None) -> None:
     while True:
         try:
+            # v1.8.7b planner dynamic universe
+            try:
+                dash = await state.get_dashboard_state()
+                system = dash.get("system", {}) or {}
+                fut_pool = list(system.get("fut_pool", []) or [])
+                spot_pool = list(system.get("spot_pool", []) or [])
+                base_universe = list(getattr(CONFIG.planner, "snapshot_universe", []) or [])
+
+                dynamic_enabled = bool(getattr(CONFIG.planner, "dynamic_universe_from_pool", True))
+                dynamic_limit = int(getattr(CONFIG.planner, "dynamic_universe_limit", 40) or 40)
+                include_spot = bool(getattr(CONFIG.planner, "dynamic_universe_include_spot", True))
+
+                if dynamic_enabled:
+                    merged = []
+                    seen = set()
+
+                    for sym in fut_pool:
+                        key = safe_str(sym).upper()
+                        if key and key not in seen:
+                            merged.append(key)
+                            seen.add(key)
+                        if len(merged) >= dynamic_limit:
+                            break
+
+                    if include_spot and len(merged) < dynamic_limit:
+                        for sym in spot_pool:
+                            key = safe_str(sym).upper()
+                            if key and key not in seen:
+                                merged.append(key)
+                                seen.add(key)
+                            if len(merged) >= dynamic_limit:
+                                break
+
+                    if len(merged) < min(18, dynamic_limit):
+                        for sym in base_universe:
+                            key = safe_str(sym).upper()
+                            if key and key not in seen:
+                                merged.append(key)
+                                seen.add(key)
+                            if len(merged) >= dynamic_limit:
+                                break
+
+                    if merged:
+                        provider.universe = merged
+
+                    if logger:
+                        logger.info("PLANNER_PROVIDER", "dynamic universe updated", {
+                            "count": len(getattr(provider, "universe", []) or []),
+                            "limit": dynamic_limit,
+                            "from_fut_pool": len(fut_pool),
+                            "from_spot_pool": len(spot_pool),
+                            "preview": list(getattr(provider, "universe", []) or [])[:25],
+                        })
+            except Exception as exc:
+                if logger:
+                    logger.warning("PLANNER_PROVIDER", "dynamic universe update failed; static universe kept", {
+                        "error": str(exc),
+                    })
+
             snapshot = await provider.build_snapshot()
             await state.update_planner_market_data(snapshot)
 
@@ -233,10 +294,46 @@ async def watchlist_loop(state, watchlist_builder, watch_engine, screener=None, 
                     macro_filter=macro_filter,
                 )
 
+            # v1.8.7c atomic watchlist swap:
+            # never replace a non-empty watchlist with temporary empty output during pool/TA refresh.
+            previous_items = dash.get("terminal", {}).get("watchlist_mini", []) or []
+            built_count = len(items)
+
+            if not items and previous_items:
+                items = previous_items
+                if logger:
+                    logger.warning("WATCHLIST", "empty watchlist build skipped; previous snapshot preserved", {
+                        "previous_count": len(previous_items),
+                        "built_count": built_count,
+                        "fut_pool_count": len(fut_pool or []),
+                        "spot_pool_count": len(spot_pool or []),
+                        "ta_count": len(ta_data or {}),
+                    })
+
             await state.set_watchlist_mini(items)
 
             if logger:
-                logger.info("WATCHLIST", "watchlist updated", {"count": len(items)})
+                meta = {}
+                try:
+                    latest_dash = await state.get_dashboard_state()
+                    meta = latest_dash.get("terminal", {}).get("watchlist_meta", {}) or {}
+                except Exception:
+                    meta = {}
+
+                actual_count = len(items)
+                try:
+                    actual_count = len((latest_dash.get("terminal", {}) or {}).get("watchlist_mini", []) or [])
+                except Exception:
+                    pass
+
+                logger.info("WATCHLIST", "watchlist updated", {
+                    "count": actual_count,
+                    "built_count": built_count,
+                    "preserved_previous": bool(meta.get("preserved_previous", False)),
+                    "watchlist_source": meta.get("source", "fresh"),
+                    "restored_count": meta.get("restored_count", 0),
+                    "authority_instance_id": meta.get("authority_instance_id", ""),
+                })
 
         except Exception as exc:
             await state.add_sys_log("❌ [WATCHLIST]", str(exc))
@@ -254,6 +351,8 @@ async def strategy_loop(
     trade_logger,
     risk_manager,
     watch_engine,
+    confirmation_engine,
+    defensive_gates,
     screener=None,
     logger=None,
     open_close_lock=None,
@@ -339,6 +438,17 @@ async def strategy_loop(
                             pass
                         continue
 
+                    blocked_cross, cross_reason = defensive_gates.has_opposite_market_exposure(sym, "fut", router, watch_engine)
+                    if blocked_cross:
+                        if logger:
+                            logger.info("DEFENSE", "futures candidate blocked by cross-market exposure", {
+                                "symbol": sym,
+                                "reason": cross_reason,
+                                "setup_type": analysis.get("setup_type"),
+                                "score": analysis.get("score"),
+                            })
+                        continue
+
                     item = watch_engine.upsert_from_analysis(
                         symbol=sym,
                         market="fut",
@@ -373,7 +483,7 @@ async def strategy_loop(
                 current_fut_open_count = 1 if router.get_futures_position() is not None else 0
 
             if current_fut_open_count < risk_status["max_open_futures_positions"]:
-                for item in watch_engine.confirmed_items(ta_data, market="fut"):
+                for item in confirmation_engine.confirmed_futures_items(watch_engine, ta_data):
                     sym = safe_str(item.get("symbol")).upper()
                     current = ta_data.get(sym)
 
@@ -431,6 +541,25 @@ async def strategy_loop(
                                 "analysis": analysis,
                                 "watch": item,
                             })
+
+                        if defensive_gates.should_remove_ready_after_block(reason):
+                            try:
+                                watch_engine.remove(sym, "fut", side)
+                                await state.add_sys_log("🧯 [FUT WATCH]", f"{sym} removed from ready watch | {reason}")
+                                if logger:
+                                    logger.info("DEFENSE", "ready futures watch removed after defensive block", {
+                                        "symbol": sym,
+                                        "side": side,
+                                        "reason": reason,
+                                    })
+                            except Exception as exc:
+                                if logger:
+                                    logger.warning("DEFENSE", "ready futures watch remove failed", {
+                                        "symbol": sym,
+                                        "side": side,
+                                        "error": str(exc),
+                                    })
+                            continue
 
                         if "cooldown after open" in reason.lower():
                             try:
@@ -604,7 +733,30 @@ async def strategy_loop(
                     continue
 
                 # ИНТЕГРАЦИЯ ПЛАНЕРА ДЛЯ АНАЛИЗА
-                analysis = strategy.analyze_spot(current, macro_filter, planner_idea=planner_map.get(sym))
+                planner_idea = planner_map.get(sym)
+                analysis = strategy.analyze_spot(current, macro_filter, planner_idea=planner_idea)
+
+                spot_ok, spot_reason = defensive_gates.spot_planner_gate(sym, planner_idea, analysis)
+                if not spot_ok:
+                    if logger:
+                        logger.info("DEFENSE", "spot candidate blocked by planner discipline", {
+                            "symbol": sym,
+                            "reason": spot_reason,
+                            "setup_type": analysis.get("setup_type"),
+                            "score": analysis.get("score"),
+                        })
+                    continue
+
+                blocked_cross, cross_reason = defensive_gates.has_opposite_market_exposure(sym, "spot", router, watch_engine)
+                if blocked_cross:
+                    if logger:
+                        logger.info("DEFENSE", "spot candidate blocked by cross-market exposure", {
+                            "symbol": sym,
+                            "reason": cross_reason,
+                            "setup_type": analysis.get("setup_type"),
+                            "score": analysis.get("score"),
+                        })
+                    continue
 
                 if analysis.get("should_open"):
                     item = watch_engine.upsert_from_analysis(
@@ -636,7 +788,7 @@ async def strategy_loop(
 
             # 4) Confirm spot: only confirmed WATCH candidates open Entry 1.
             if current_spot_open_count < risk_status["max_open_spot_positions"]:
-                for item in watch_engine.confirmed_items(ta_data, market="spot"):
+                for item in confirmation_engine.confirmed_spot_items(watch_engine, ta_data, planner_map):
                     sym = safe_str(item.get("symbol")).upper()
 
                     if router.get_spot_position(sym) is not None:
@@ -649,7 +801,38 @@ async def strategy_loop(
                         continue
                         
                     # ИНТЕГРАЦИЯ ПЛАНЕРА ДЛЯ ПОДТВЕРЖДЕНИЯ
-                    analysis = strategy.analyze_spot(current, macro_filter, planner_idea=planner_map.get(sym))
+                    planner_idea = planner_map.get(sym)
+                    spot_ok, spot_reason = defensive_gates.spot_planner_gate(sym, planner_idea, item)
+                    if not spot_ok:
+                        await state.add_sys_log("⚠️ [SPOT WATCH]", f"{sym} defensive block | {spot_reason}")
+                        if logger:
+                            logger.info("DEFENSE", "spot confirmation blocked by planner discipline", {
+                                "symbol": sym,
+                                "reason": spot_reason,
+                                "watch": item,
+                            })
+                        try:
+                            watch_engine.remove(sym, "spot")
+                        except Exception:
+                            pass
+                        continue
+
+                    blocked_cross, cross_reason = defensive_gates.has_opposite_market_exposure(sym, "spot", router, watch_engine)
+                    if blocked_cross:
+                        await state.add_sys_log("⚠️ [SPOT WATCH]", f"{sym} defensive block | {cross_reason}")
+                        if logger:
+                            logger.info("DEFENSE", "spot confirmation blocked by cross-market exposure", {
+                                "symbol": sym,
+                                "reason": cross_reason,
+                                "watch": item,
+                            })
+                        try:
+                            watch_engine.remove(sym, "spot")
+                        except Exception:
+                            pass
+                        continue
+
+                    analysis = strategy.analyze_spot(current, macro_filter, planner_idea=planner_idea)
 
                     decision = decision_engine.evaluate(
                         symbol=sym,
@@ -823,6 +1006,8 @@ async def main() -> None:
     decision_engine = DecisionEngine(logger=logger)
     watchlist_builder = WatchlistBuilder(strategy=strategy, logger=logger)
     watch_engine = WatchEngine(logger=logger)
+    confirmation_engine = ConfirmationEngine()
+    defensive_gates = DefensiveGates()
 
     risk_manager = RiskManager()
     router = ExecutionRouter(mode=CONFIG.trading.mode)
@@ -876,6 +1061,8 @@ async def main() -> None:
                 trade_logger=logger,
                 risk_manager=risk_manager,
                 watch_engine=watch_engine,
+                confirmation_engine=confirmation_engine,
+                defensive_gates=defensive_gates,
                 screener=screener,
                 logger=logger,
                 open_close_lock=open_close_lock,

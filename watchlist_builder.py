@@ -184,4 +184,6 @@ class WatchlistBuilder:
             reverse=True,
         )
 
-        return items[:20]
+        limit = safe_int(getattr(CONFIG.trading, "watchlist_display_limit", 40), 40)
+        limit = max(20, min(80, limit))
+        return items[:limit]

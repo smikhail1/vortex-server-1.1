@@ -62,3 +62,145 @@ class ExecutionRouter:
     def close_futures_position(self, p, r): return self.paper_futures.close_position(p, r) if self.fut_mode == "PAPER" else None
     def close_spot_position(self, s, p, r): return self.paper_spot.close_position(s, p, r) if self.spot_mode == "PAPER" else None
     def get_runtime_snapshot(self): return {"mode": self.get_mode(), "ts": time.time()}
+
+
+# --- VORTEX v1.8.1 EXECUTION ROUTER COMPAT ---
+def _vortex_router_get_spot_position_v181(self, symbol):
+    try:
+        sym = str(symbol or "").upper()
+
+        engine = getattr(self, "paper_spot", None)
+        if engine is not None:
+            if hasattr(engine, "get_position"):
+                return engine.get_position(sym)
+            if hasattr(engine, "positions"):
+                return engine.positions.get(sym)
+
+        engine = getattr(self, "spot_engine", None)
+        if engine is not None:
+            if hasattr(engine, "get_position"):
+                return engine.get_position(sym)
+            if hasattr(engine, "positions"):
+                return engine.positions.get(sym)
+
+        return None
+    except Exception:
+        return None
+
+
+def _vortex_router_get_all_futures_positions_v181(self):
+    try:
+        pos = None
+        if hasattr(self, "get_futures_position"):
+            pos = self.get_futures_position()
+        if pos is None:
+            return {}
+        sym = getattr(pos, "symbol", "") or "FUT"
+        return {str(sym).upper(): pos}
+    except Exception:
+        return {}
+
+
+try:
+    ExecutionRouter.get_spot_position = _vortex_router_get_spot_position_v181
+    if not hasattr(ExecutionRouter, "get_all_futures_positions"):
+        ExecutionRouter.get_all_futures_positions = _vortex_router_get_all_futures_positions_v181
+except Exception:
+    pass
+# --- END VORTEX v1.8.1 EXECUTION ROUTER COMPAT ---
+
+
+# --- VORTEX v1.8.5b ROUTER RUNTIME SNAPSHOT ---
+def _vortex_position_to_dict_v185b(pos):
+    if pos is None:
+        return {}
+    if isinstance(pos, dict):
+        return dict(pos)
+
+    out = {}
+    keys = [
+        "symbol", "side", "qty", "entry", "avg_price", "mark_price",
+        "tp0", "tp", "tp1", "tp2", "sl", "trail_sl", "liq_price",
+        "atr", "leverage", "margin", "notional", "fee_open",
+        "fee_close_est", "pnl", "pnl_net", "max_pnl_net",
+        "tp0_hit", "tp1_hit", "breakeven", "last_event",
+        "open_time", "opened_at", "open_ts", "setup_type", "args_text",
+    ]
+    for key in keys:
+        try:
+            if hasattr(pos, key):
+                out[key] = getattr(pos, key)
+        except Exception:
+            pass
+
+    try:
+        if "symbol" in out:
+            out["symbol"] = str(out.get("symbol") or "").upper()
+    except Exception:
+        pass
+
+    return out
+
+
+def _vortex_router_runtime_snapshot_v185b(self):
+    fut_pos = None
+    fut_positions = {}
+    spot_positions = {}
+
+    try:
+        fut_pos = self.get_futures_position()
+        if fut_pos is not None:
+            sym = getattr(fut_pos, "symbol", "") or "FUT"
+            fut_positions[str(sym).upper()] = _vortex_position_to_dict_v185b(fut_pos)
+    except Exception:
+        pass
+
+    try:
+        if hasattr(self, "get_all_futures_positions"):
+            raw = self.get_all_futures_positions() or {}
+            if isinstance(raw, dict):
+                fut_positions = {
+                    str(k).upper(): _vortex_position_to_dict_v185b(v)
+                    for k, v in raw.items()
+                    if v is not None
+                }
+    except Exception:
+        pass
+
+    try:
+        raw_spot = self.get_all_spot_positions() if hasattr(self, "get_all_spot_positions") else {}
+        if isinstance(raw_spot, dict):
+            spot_positions = {
+                str(k).upper(): _vortex_position_to_dict_v185b(v)
+                for k, v in raw_spot.items()
+                if v is not None
+            }
+    except Exception:
+        pass
+
+    fut_bal = 0.0
+    spot_bal = 0.0
+    try:
+        fut_bal = self.get_futures_balance()
+    except Exception:
+        pass
+    try:
+        spot_bal = self.get_spot_balance()
+    except Exception:
+        pass
+
+    return {
+        "mode": self.get_mode() if hasattr(self, "get_mode") else "",
+        "ts": time.time(),
+        "balances": {"fut": fut_bal, "spot": spot_bal},
+        "fut_position": _vortex_position_to_dict_v185b(fut_pos),
+        "fut_positions": fut_positions,
+        "spot_positions": spot_positions,
+    }
+
+try:
+    ExecutionRouter.get_runtime_snapshot = _vortex_router_runtime_snapshot_v185b
+except Exception:
+    pass
+# --- END VORTEX v1.8.5b ROUTER RUNTIME SNAPSHOT ---
+

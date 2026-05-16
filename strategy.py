@@ -111,3 +111,171 @@ class SwingStrategy:
         }
 
 def apply_exchange_intel_filters_to_analysis(ans, ex=None): return ans
+
+# --- VORTEX v1.8.1 STRATEGY FUTURES/SPOT UPGRADE ---
+try:
+    _vortex_old_analyze_futures = SwingStrategy.analyze_futures
+    _vortex_old_analyze_spot = SwingStrategy.analyze_spot
+
+    def _vortex_analyze_futures_v181(self, current, macro_filter="allow_all"):
+        d = current or {}
+
+        base = _vortex_old_analyze_futures(self, current, macro_filter)
+        if isinstance(base, dict) and base.get("should_open"):
+            return base
+
+        try:
+            thresh = int(getattr(CONFIG.trading, "futures_min_score_to_open", 7))
+            adx = safe_float(d.get("adx"), 0.0)
+            rsi = safe_float(d.get("rsi_main"), 50.0)
+            slope = safe_float(d.get("rsi_slope"), 0.0)
+            vol_ratio = safe_float(d.get("vol_ratio"), 0.0)
+            trend_4h = safe_str(d.get("trend_4h")).lower()
+            price = safe_float(d.get("price"), 0.0)
+            ema20 = safe_float(d.get("ema20"), 0.0)
+            ema50 = safe_float(d.get("ema50"), 0.0)
+
+            if macro_filter == "block_shorts":
+                return base
+
+            score = 0
+            args = [f"ADX:{adx}"]
+
+            if adx >= 20:
+                score += 2
+                args.append("trend strength ok")
+            if trend_4h in {"down", "bear", "bearish"}:
+                score += 3
+                args.append("4H Trend Down")
+            if rsi < 50:
+                score += 1
+                args.append("RSI Bearish")
+            if slope < -0.25:
+                score += 1
+                args.append("RSI Slope Down")
+            if vol_ratio > 1.10:
+                score += 1
+                args.append("Volume OK")
+            if price > 0 and ema20 > 0 and price < ema20:
+                score += 1
+                args.append("below EMA20")
+            if price > 0 and ema50 > 0 and price < ema50:
+                score += 1
+                args.append("below EMA50")
+
+            if adx < 15:
+                return self._result(blocked_reason=f"flat market (ADX:{adx})", threshold=thresh)
+
+            if score >= thresh:
+                return self._result(
+                    should_open=True,
+                    signal="SHORT",
+                    score=score,
+                    setup_type="trend_short_v1.8.1",
+                    args=args,
+                    threshold=thresh,
+                )
+
+            if isinstance(base, dict):
+                return base
+            return self._result(should_open=False, score=score, setup_type="trend_short_v1.8.1", args=args, threshold=thresh)
+
+        except Exception as exc:
+            if isinstance(base, dict):
+                return base
+            return self._result(blocked_reason=f"futures wrapper error: {exc}")
+
+    def _vortex_analyze_spot_v181(self, current, macro_filter="allow_all", planner_idea=None):
+        d = current or {}
+
+        if isinstance(planner_idea, dict):
+            try:
+                price = safe_float(d.get("price"), 0.0)
+                score = safe_float(planner_idea.get("score"), 0.0)
+                ready = bool(planner_idea.get("ready"))
+                tier = safe_str(planner_idea.get("tier"), "")
+                action_hint = safe_str(planner_idea.get("action_hint"), "")
+                invalid = safe_float(planner_idea.get("invalid_level"), 0.0)
+                tp_base = safe_float(planner_idea.get("tp_base"), 0.0)
+                rsi = safe_float(d.get("rsi_main"), 50.0)
+                vol_ratio = safe_float(d.get("vol_ratio"), 1.0)
+                atr = safe_float(d.get("atr"), 0.0)
+
+                if macro_filter == "block_longs":
+                    return self._result(
+                        should_open=False,
+                        signal="BUY",
+                        score=int(score),
+                        setup_type="planner_spot_v1.8.1",
+                        blocked_reason="macro filter blocks spot longs",
+                    )
+
+                if ready and price > 0 and score >= 70:
+                    if invalid > 0 and price <= invalid:
+                        return self._result(
+                            should_open=False,
+                            signal="BUY",
+                            score=int(score),
+                            setup_type="planner_spot_v1.8.1",
+                            blocked_reason="price below planner invalid level",
+                        )
+
+                    if rsi >= 82:
+                        return self._result(
+                            should_open=False,
+                            signal="BUY",
+                            score=int(score),
+                            setup_type="planner_spot_v1.8.1",
+                            blocked_reason="spot overheated RSI",
+                        )
+
+                    if vol_ratio < 0.60:
+                        return self._result(
+                            should_open=False,
+                            signal="BUY",
+                            score=int(score),
+                            setup_type="planner_spot_v1.8.1",
+                            blocked_reason="spot volume too weak",
+                        )
+
+                    trigger = safe_float(
+                        planner_idea.get("trigger_price")
+                        or planner_idea.get("entry_zone_high")
+                        or price * 1.0005,
+                        price,
+                    )
+
+                    if tp_base <= 0:
+                        tp_base = price + atr * safe_float(getattr(CONFIG.strategy, "spot_tp_atr_mult", 3.0), 3.0)
+
+                    return self._result(
+                        should_open=True,
+                        signal="BUY",
+                        score=int(min(score, 100)),
+                        setup_type="planner_spot_v1.8.1",
+                        args=[
+                            f"Planner Tier {tier}",
+                            action_hint,
+                            f"planner_score={score}",
+                            "validated_by_spot_strategy",
+                        ],
+                        threshold=0,
+                        extra={
+                            "trigger_price": trigger,
+                            "invalidation_price": invalid,
+                            "tp_base": tp_base,
+                            "planner_score": score,
+                            "planner_tier": tier,
+                        },
+                    )
+            except Exception as exc:
+                return self._result(blocked_reason=f"planner spot validation error: {exc}")
+
+        return _vortex_old_analyze_spot(self, current, macro_filter, planner_idea=planner_idea)
+
+    SwingStrategy.analyze_futures = _vortex_analyze_futures_v181
+    SwingStrategy.analyze_spot = _vortex_analyze_spot_v181
+
+except Exception:
+    pass
+# --- END VORTEX v1.8.1 STRATEGY FUTURES/SPOT UPGRADE ---

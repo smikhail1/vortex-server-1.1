@@ -193,3 +193,494 @@ class StateManager:
             import time
             data["hold_sec"] = max(0, int(time.time() - open_time))
         return data
+
+# --- VORTEX v1.8.5b POSITION VISIBILITY SYNC ---
+async def _vortex_sync_router_snapshot_v185b(self, router):
+    try:
+        f_bal = safe_float(router.get_futures_balance())
+    except Exception:
+        f_bal = 0.0
+
+    try:
+        s_bal = safe_float(router.get_spot_balance())
+    except Exception:
+        s_bal = 0.0
+
+    fut_positions = {}
+    spot_positions = {}
+
+    try:
+        raw_fut = {}
+        if hasattr(router, "get_all_futures_positions"):
+            raw_fut = router.get_all_futures_positions() or {}
+        elif hasattr(router, "get_futures_position"):
+            pos = router.get_futures_position()
+            if pos is not None:
+                sym = "FUT"
+                if isinstance(pos, dict):
+                    sym = safe_str(pos.get("symbol") or "FUT").upper()
+                else:
+                    sym = safe_str(getattr(pos, "symbol", "") or "FUT").upper()
+                raw_fut = {sym: pos}
+
+        if isinstance(raw_fut, dict):
+            for sym, pos in raw_fut.items():
+                if pos is None:
+                    continue
+                key = safe_str(sym).upper()
+                if key:
+                    fut_positions[key] = self._serialize_position_object(pos, "FUT")
+    except Exception:
+        fut_positions = {}
+
+    try:
+        raw_spot = router.get_all_spot_positions() if hasattr(router, "get_all_spot_positions") else {}
+
+        if isinstance(raw_spot, dict):
+            items = list(raw_spot.items())
+        elif isinstance(raw_spot, list):
+            items = []
+            for pos in raw_spot:
+                if isinstance(pos, dict):
+                    sym = safe_str(pos.get("symbol")).upper()
+                else:
+                    sym = safe_str(getattr(pos, "symbol", "")).upper()
+                if sym:
+                    items.append((sym, pos))
+        else:
+            items = []
+
+        for sym, pos in items:
+            if pos is None:
+                continue
+            key = safe_str(sym).upper()
+            if key:
+                spot_positions[key] = self._serialize_position_object(pos, "SPOT")
+    except Exception:
+        spot_positions = {}
+
+    async with self._lock:
+        self.state.setdefault("account", {}).setdefault("balances", {})
+        self.state["account"]["balances"]["fut"] = f_bal
+        self.state["account"]["balances"]["spot"] = s_bal
+
+        self.state.setdefault("positions", {})
+        self.state["positions"]["fut"] = fut_positions
+        self.state["positions"]["spot"] = spot_positions
+
+try:
+    StateManager.sync_router_snapshot = _vortex_sync_router_snapshot_v185b
+except Exception:
+    pass
+# --- END VORTEX v1.8.5b POSITION VISIBILITY SYNC ---
+
+
+
+# --- VORTEX v1.8.7c ATOMIC WATCHLIST SWAP SAFEGUARD ---
+async def _vortex_set_watchlist_mini_v187c(self, items):
+    try:
+        new_items = list(items or [])
+    except Exception:
+        new_items = []
+
+    async with self._lock:
+        terminal = self.state.setdefault("terminal", {})
+        prev = terminal.get("watchlist_mini", []) or []
+
+        if not new_items and prev:
+            terminal.setdefault("watchlist_meta", {})
+            terminal["watchlist_meta"].update({
+                "preserved_previous": True,
+                "last_empty_swap_skipped": time.time(),
+                "previous_count": len(prev),
+            })
+            return
+
+        terminal["watchlist_mini"] = new_items
+        terminal.setdefault("watchlist_meta", {})
+        terminal["watchlist_meta"].update({
+            "preserved_previous": False,
+            "last_update_ts": time.time(),
+            "count": len(new_items),
+        })
+
+try:
+    StateManager.set_watchlist_mini = _vortex_set_watchlist_mini_v187c
+except Exception:
+    pass
+# --- END VORTEX v1.8.7c ATOMIC WATCHLIST SWAP SAFEGUARD ---
+
+
+
+# --- VORTEX v1.8.7d_fix PERSISTENT WATCHLIST MEMORY ---
+def _vortex_watchlist_init_memory_v187d_fix(self):
+    try:
+        if not hasattr(self, "_last_non_empty_watchlist"):
+            self._last_non_empty_watchlist = []
+        if not hasattr(self, "_last_non_empty_watchlist_ts"):
+            self._last_non_empty_watchlist_ts = 0.0
+    except Exception:
+        pass
+
+
+async def _vortex_set_watchlist_mini_v187d_fix(self, items):
+    _vortex_watchlist_init_memory_v187d_fix(self)
+
+    try:
+        new_items = list(items or [])
+    except Exception:
+        new_items = []
+
+    async with self._lock:
+        terminal = self.state.setdefault("terminal", {})
+        prev_state = terminal.get("watchlist_mini", []) or []
+        prev_memory = getattr(self, "_last_non_empty_watchlist", []) or []
+
+        if not new_items:
+            restore = prev_state or prev_memory
+            terminal.setdefault("watchlist_meta", {})
+
+            if restore:
+                terminal["watchlist_mini"] = list(restore)
+                terminal["watchlist_meta"].update({
+                    "preserved_previous": True,
+                    "source": "state" if prev_state else "memory",
+                    "last_empty_swap_skipped": time.time(),
+                    "restored_count": len(restore),
+                    "memory_age_sec": round(time.time() - float(getattr(self, "_last_non_empty_watchlist_ts", 0.0) or 0.0), 1),
+                })
+                return
+
+            terminal["watchlist_mini"] = []
+            terminal["watchlist_meta"].update({
+                "preserved_previous": False,
+                "source": "empty_no_previous",
+                "last_update_ts": time.time(),
+                "count": 0,
+            })
+            return
+
+        self._last_non_empty_watchlist = list(new_items)
+        self._last_non_empty_watchlist_ts = time.time()
+
+        terminal["watchlist_mini"] = new_items
+        terminal.setdefault("watchlist_meta", {})
+        terminal["watchlist_meta"].update({
+            "preserved_previous": False,
+            "source": "fresh",
+            "last_update_ts": time.time(),
+            "count": len(new_items),
+            "memory_count": len(self._last_non_empty_watchlist),
+        })
+
+
+async def _vortex_get_dashboard_state_v187d_fix(self):
+    _vortex_watchlist_init_memory_v187d_fix(self)
+
+    async with self._lock:
+        self.state["system"]["sys_logs"] = list(self._sys_logs)
+
+        terminal = self.state.setdefault("terminal", {})
+        current = terminal.get("watchlist_mini", []) or []
+        memory = getattr(self, "_last_non_empty_watchlist", []) or []
+
+        if not current and memory:
+            terminal["watchlist_mini"] = list(memory)
+            terminal.setdefault("watchlist_meta", {})
+            terminal["watchlist_meta"].update({
+                "preserved_previous": True,
+                "source": "dashboard_memory_restore",
+                "restored_count": len(memory),
+                "restored_ts": time.time(),
+                "memory_age_sec": round(time.time() - float(getattr(self, "_last_non_empty_watchlist_ts", 0.0) or 0.0), 1),
+            })
+
+        return copy.deepcopy(self.state)
+
+
+async def _vortex_replace_state_v187d_fix(self, n):
+    _vortex_watchlist_init_memory_v187d_fix(self)
+
+    if not isinstance(n, dict):
+        raise ValueError("state must be dict")
+
+    memory = list(getattr(self, "_last_non_empty_watchlist", []) or [])
+    memory_ts = float(getattr(self, "_last_non_empty_watchlist_ts", 0.0) or 0.0)
+
+    async with self._lock:
+        self.state = copy.deepcopy(n)
+        self.state.setdefault("meta", dict(DEFAULT_STATE_META))
+        self.state.setdefault("market", {})
+        self.state["market"].setdefault("prices", {})
+        self.state["market"].setdefault("ta_data", {})
+        self.state["market"].setdefault("symbol_health", {})
+        self.state["market"].setdefault("last_market_update_ts", 0.0)
+        self.state["market"].setdefault("last_ta_update_ts", 0.0)
+
+        self.state.setdefault("account", {"balances": {}})
+        self.state["account"].setdefault("balances", {})
+        self.state["account"]["balances"].setdefault("fut", float(CONFIG.futures.start_balance))
+        self.state["account"]["balances"].setdefault("spot", float(CONFIG.spot.start_balance))
+
+        self.state.setdefault("positions", {"fut": {}, "spot": {}})
+        self.state["positions"].setdefault("fut", {})
+        self.state["positions"].setdefault("spot", {})
+
+        self.state.setdefault("system", {})
+        self.state["system"].setdefault("sys_logs", [])
+
+        self.state.setdefault("planner", {"market_data": {}, "ideas": [], "spot_planner": {}})
+        self.state.setdefault("terminal", {})
+        self.state["terminal"].setdefault("watchlist_mini", [])
+
+        current = self.state["terminal"].get("watchlist_mini", []) or []
+        if current:
+            self._last_non_empty_watchlist = list(current)
+            self._last_non_empty_watchlist_ts = time.time()
+        elif memory:
+            self._last_non_empty_watchlist = memory
+            self._last_non_empty_watchlist_ts = memory_ts
+            self.state["terminal"]["watchlist_mini"] = list(memory)
+            self.state["terminal"].setdefault("watchlist_meta", {})
+            self.state["terminal"]["watchlist_meta"].update({
+                "preserved_previous": True,
+                "source": "replace_state_memory_restore",
+                "restored_count": len(memory),
+                "restored_ts": time.time(),
+            })
+
+        self._sys_logs.clear()
+        for line in list(self.state["system"].get("sys_logs", []))[:CONFIG.logging.max_sys_logs]:
+            self._sys_logs.append(safe_str(line))
+
+
+try:
+    StateManager.set_watchlist_mini = _vortex_set_watchlist_mini_v187d_fix
+    StateManager.get_dashboard_state = _vortex_get_dashboard_state_v187d_fix
+    StateManager.replace_state = _vortex_replace_state_v187d_fix
+except Exception:
+    pass
+# --- END VORTEX v1.8.7d_fix PERSISTENT WATCHLIST MEMORY ---
+
+
+
+# --- VORTEX v1.8.8 STATE AUTHORITY GUARD ---
+# Purpose:
+# - one state authority runtime diagnostics
+# - durable last-good watchlist cache survives service restart
+# - empty watchlist builds cannot wipe terminal state if cache exists
+
+import json as _vortex_json
+from pathlib import Path as _VortexPath
+
+_VORTEX_WATCHLIST_CACHE_PATH = _VortexPath("_runtime/watchlist_cache.json")
+
+
+def _vortex_ensure_runtime_dir_v188():
+    try:
+        _VORTEX_WATCHLIST_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _vortex_load_watchlist_cache_v188():
+    try:
+        if not _VORTEX_WATCHLIST_CACHE_PATH.exists():
+            return []
+        data = _vortex_json.loads(_VORTEX_WATCHLIST_CACHE_PATH.read_text(encoding="utf-8"))
+        items = data.get("items", []) if isinstance(data, dict) else []
+        return items if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
+def _vortex_save_watchlist_cache_v188(items):
+    try:
+        _vortex_ensure_runtime_dir_v188()
+        payload = {
+            "ts": time.time(),
+            "count": len(items or []),
+            "items": list(items or []),
+        }
+        _VORTEX_WATCHLIST_CACHE_PATH.write_text(
+            _vortex_json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _vortex_state_authority_init_v188(self):
+    try:
+        if not hasattr(self, "_authority_instance_id"):
+            self._authority_instance_id = f"StateManager:{id(self)}:{int(time.time())}"
+        if not hasattr(self, "_last_non_empty_watchlist"):
+            self._last_non_empty_watchlist = []
+        if not hasattr(self, "_last_non_empty_watchlist_ts"):
+            self._last_non_empty_watchlist_ts = 0.0
+
+        if not self._last_non_empty_watchlist:
+            cached = _vortex_load_watchlist_cache_v188()
+            if cached:
+                self._last_non_empty_watchlist = list(cached)
+                self._last_non_empty_watchlist_ts = time.time()
+    except Exception:
+        pass
+
+
+async def _vortex_set_watchlist_mini_v188(self, items):
+    _vortex_state_authority_init_v188(self)
+
+    try:
+        new_items = list(items or [])
+    except Exception:
+        new_items = []
+
+    async with self._lock:
+        terminal = self.state.setdefault("terminal", {})
+        prev_state = terminal.get("watchlist_mini", []) or []
+        prev_memory = getattr(self, "_last_non_empty_watchlist", []) or []
+
+        if not prev_memory:
+            prev_memory = _vortex_load_watchlist_cache_v188()
+
+        if not new_items:
+            restore = prev_state or prev_memory
+            terminal.setdefault("watchlist_meta", {})
+
+            if restore:
+                terminal["watchlist_mini"] = list(restore)
+                terminal["watchlist_meta"].update({
+                    "preserved_previous": True,
+                    "source": "state" if prev_state else ("memory" if getattr(self, "_last_non_empty_watchlist", []) else "disk_cache"),
+                    "last_empty_swap_skipped": time.time(),
+                    "restored_count": len(restore),
+                    "authority_instance_id": getattr(self, "_authority_instance_id", ""),
+                })
+                return
+
+            terminal["watchlist_mini"] = []
+            terminal.setdefault("watchlist_meta", {})
+            terminal["watchlist_meta"].update({
+                "preserved_previous": False,
+                "source": "empty_no_previous",
+                "last_update_ts": time.time(),
+                "count": 0,
+                "authority_instance_id": getattr(self, "_authority_instance_id", ""),
+            })
+            return
+
+        self._last_non_empty_watchlist = list(new_items)
+        self._last_non_empty_watchlist_ts = time.time()
+        _vortex_save_watchlist_cache_v188(new_items)
+
+        terminal["watchlist_mini"] = new_items
+        terminal.setdefault("watchlist_meta", {})
+        terminal["watchlist_meta"].update({
+            "preserved_previous": False,
+            "source": "fresh",
+            "last_update_ts": time.time(),
+            "count": len(new_items),
+            "memory_count": len(self._last_non_empty_watchlist),
+            "authority_instance_id": getattr(self, "_authority_instance_id", ""),
+        })
+
+
+async def _vortex_get_dashboard_state_v188(self):
+    _vortex_state_authority_init_v188(self)
+
+    async with self._lock:
+        self.state["system"]["sys_logs"] = list(self._sys_logs)
+        self.state.setdefault("meta", {})
+        self.state["meta"]["state_authority_id"] = getattr(self, "_authority_instance_id", "")
+
+        terminal = self.state.setdefault("terminal", {})
+        current = terminal.get("watchlist_mini", []) or []
+        memory = getattr(self, "_last_non_empty_watchlist", []) or []
+        if not memory:
+            memory = _vortex_load_watchlist_cache_v188()
+
+        if not current and memory:
+            terminal["watchlist_mini"] = list(memory)
+            terminal.setdefault("watchlist_meta", {})
+            terminal["watchlist_meta"].update({
+                "preserved_previous": True,
+                "source": "dashboard_memory_restore" if getattr(self, "_last_non_empty_watchlist", []) else "dashboard_disk_cache_restore",
+                "restored_count": len(memory),
+                "restored_ts": time.time(),
+                "authority_instance_id": getattr(self, "_authority_instance_id", ""),
+            })
+
+        return copy.deepcopy(self.state)
+
+
+async def _vortex_replace_state_v188(self, n):
+    _vortex_state_authority_init_v188(self)
+
+    if not isinstance(n, dict):
+        raise ValueError("state must be dict")
+
+    memory = list(getattr(self, "_last_non_empty_watchlist", []) or [])
+    if not memory:
+        memory = _vortex_load_watchlist_cache_v188()
+    memory_ts = float(getattr(self, "_last_non_empty_watchlist_ts", 0.0) or 0.0)
+
+    async with self._lock:
+        self.state = copy.deepcopy(n)
+        self.state.setdefault("meta", dict(DEFAULT_STATE_META))
+        self.state["meta"]["state_authority_id"] = getattr(self, "_authority_instance_id", "")
+
+        self.state.setdefault("market", {})
+        self.state["market"].setdefault("prices", {})
+        self.state["market"].setdefault("ta_data", {})
+        self.state["market"].setdefault("symbol_health", {})
+        self.state["market"].setdefault("last_market_update_ts", 0.0)
+        self.state["market"].setdefault("last_ta_update_ts", 0.0)
+
+        self.state.setdefault("account", {"balances": {}})
+        self.state["account"].setdefault("balances", {})
+        self.state["account"]["balances"].setdefault("fut", float(CONFIG.futures.start_balance))
+        self.state["account"]["balances"].setdefault("spot", float(CONFIG.spot.start_balance))
+
+        self.state.setdefault("positions", {"fut": {}, "spot": {}})
+        self.state["positions"].setdefault("fut", {})
+        self.state["positions"].setdefault("spot", {})
+
+        self.state.setdefault("system", {})
+        self.state["system"].setdefault("sys_logs", [])
+
+        self.state.setdefault("planner", {"market_data": {}, "ideas": [], "spot_planner": {}})
+        self.state.setdefault("terminal", {})
+        self.state["terminal"].setdefault("watchlist_mini", [])
+
+        current = self.state["terminal"].get("watchlist_mini", []) or []
+        if current:
+            self._last_non_empty_watchlist = list(current)
+            self._last_non_empty_watchlist_ts = time.time()
+            _vortex_save_watchlist_cache_v188(current)
+        elif memory:
+            self._last_non_empty_watchlist = list(memory)
+            self._last_non_empty_watchlist_ts = memory_ts or time.time()
+            self.state["terminal"]["watchlist_mini"] = list(memory)
+            self.state["terminal"].setdefault("watchlist_meta", {})
+            self.state["terminal"]["watchlist_meta"].update({
+                "preserved_previous": True,
+                "source": "replace_state_memory_restore",
+                "restored_count": len(memory),
+                "restored_ts": time.time(),
+                "authority_instance_id": getattr(self, "_authority_instance_id", ""),
+            })
+
+        self._sys_logs.clear()
+        for line in list(self.state["system"].get("sys_logs", []))[:CONFIG.logging.max_sys_logs]:
+            self._sys_logs.append(safe_str(line))
+
+
+try:
+    StateManager.set_watchlist_mini = _vortex_set_watchlist_mini_v188
+    StateManager.get_dashboard_state = _vortex_get_dashboard_state_v188
+    StateManager.replace_state = _vortex_replace_state_v188
+except Exception:
+    pass
+# --- END VORTEX v1.8.8 STATE AUTHORITY GUARD ---
+

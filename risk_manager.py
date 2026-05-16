@@ -132,3 +132,31 @@ class RiskManager:
                 self.daily_realized_pnl = safe_float(d.get("daily_realized_pnl"))
     def register_open(self, s, m): self.last_open_ts[(s.upper(), m.lower())] = time.time()
     def reset(self): self.daily_realized_pnl = 0.0; self.circuit_breaker_active = False
+
+
+# --- VORTEX v1.8.1 RISK STATUS COMPAT ---
+try:
+    _vortex_original_risk_get_status = RiskManager.get_status
+
+    def _vortex_risk_get_status_v181(self):
+        data = _vortex_original_risk_get_status(self)
+        if not isinstance(data, dict):
+            data = {}
+
+        try:
+            from config import CONFIG
+            default_fut = getattr(CONFIG.risk, "max_open_futures_positions", 1)
+            default_spot = getattr(CONFIG.risk, "max_open_spot_positions", 5)
+        except Exception:
+            default_fut = 1
+            default_spot = 5
+
+        data.setdefault("max_open_futures_positions", getattr(self, "max_open_futures_positions", default_fut))
+        data.setdefault("max_open_spot_positions", getattr(self, "max_open_spot_positions", default_spot))
+        data.setdefault("block_reason", getattr(self, "block_reason", ""))
+        return data
+
+    RiskManager.get_status = _vortex_risk_get_status_v181
+except Exception:
+    pass
+# --- END VORTEX v1.8.1 RISK STATUS COMPAT ---
