@@ -53,6 +53,7 @@ class APIServer:
             self.app.router.add_get("/api/debug/screener", self.handle_debug_screener),
             self.app.router.add_get("/api/history", self.handle_history),
             self.app.router.add_get("/api/stats", self.handle_stats),
+            self.app.router.add_get("/api/intelligence", self.handle_intelligence),
         ]
 
         if CONFIG.trading.debug_api_enabled:
@@ -171,6 +172,49 @@ class APIServer:
         except Exception as e:
             print("Error mobile history:", e)
         return web.json_response(res)
+
+    # --- VORTEX v1.8.19 INTELLIGENCE API ---
+    def _read_runtime_json_v1819(self, path: str, default: Any = None) -> Any:
+        try:
+            import os
+            if not os.path.exists(path):
+                return default if default is not None else {}
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as exc:
+            return {
+                "error": "read_failed",
+                "path": path,
+                "message": safe_str(exc),
+            }
+
+    async def handle_intelligence(self, request: web.Request) -> web.Response:
+        import time
+        outcome_summary = self._read_runtime_json_v1819("_runtime/outcome_summary.json", {})
+        policy_recommendations = self._read_runtime_json_v1819("_runtime/policy_recommendations.json", {})
+        shadow_adaptive_replay = self._read_runtime_json_v1819("_runtime/shadow_adaptive_replay.json", {})
+        adaptive_be_candidates = self._read_runtime_json_v1819("_runtime/adaptive_be_candidates.json", {})
+        shadow_policy_simulation = self._read_runtime_json_v1819("_runtime/shadow_policy_simulation.json", {})
+        payload = {
+            "schema": "vortex.intelligence.api.v1",
+            "schema_version": "1.8.19",
+            "ts": time.time(),
+            "mode": self.mode,
+            "available": {
+                "outcome_summary": bool(outcome_summary),
+                "policy_recommendations": bool(policy_recommendations),
+                "shadow_adaptive_replay": bool(shadow_adaptive_replay),
+                "adaptive_be_candidates": bool(adaptive_be_candidates),
+                "shadow_policy_simulation": bool(shadow_policy_simulation),
+            },
+            "outcome_summary": outcome_summary,
+            "policy_recommendations": policy_recommendations,
+            "shadow_adaptive_replay": shadow_adaptive_replay,
+            "adaptive_be_candidates": adaptive_be_candidates,
+            "shadow_policy_simulation": shadow_policy_simulation,
+        }
+        return web.json_response(payload)
+    # --- END VORTEX v1.8.19 INTELLIGENCE API ---
 
     async def handle_health(self, request: web.Request) -> web.Response:
         return web.json_response(await self.state.get_health_state(mode=self.mode))
