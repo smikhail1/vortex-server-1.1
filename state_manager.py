@@ -684,3 +684,303 @@ except Exception:
     pass
 # --- END VORTEX v1.8.8 STATE AUTHORITY GUARD ---
 
+
+
+# --- VORTEX v1.8.8b CACHE HYGIENE + PLANNER STABILITY ---
+def _vortex_is_valid_watchlist_cache_item_v188b(item):
+    try:
+        if not isinstance(item, dict):
+            return False
+        sym = safe_str(item.get("symbol")).upper()
+        if not sym or sym in {"TEST", "TESTUSDT", "DUMMY", "DUMMYUSDT"}:
+            return False
+        if not sym.endswith("USDT"):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _vortex_clean_watchlist_items_v188b(items):
+    cleaned = []
+    seen = set()
+    try:
+        for item in list(items or []):
+            if not _vortex_is_valid_watchlist_cache_item_v188b(item):
+                continue
+            sym = safe_str(item.get("symbol")).upper()
+            market = safe_str(item.get("market")).lower() or "na"
+            key = f"{market}:{sym}"
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(item)
+    except Exception:
+        return []
+    return cleaned
+
+
+def _vortex_load_watchlist_cache_v188b():
+    try:
+        raw = _vortex_load_watchlist_cache_v188()
+        cleaned = _vortex_clean_watchlist_items_v188b(raw)
+        if raw and not cleaned:
+            try:
+                _VORTEX_WATCHLIST_CACHE_PATH.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return cleaned
+    except Exception:
+        return []
+
+
+def _vortex_save_watchlist_cache_v188b(items):
+    cleaned = _vortex_clean_watchlist_items_v188b(items)
+    if not cleaned:
+        return
+    try:
+        _vortex_save_watchlist_cache_v188(cleaned)
+    except Exception:
+        pass
+
+
+async def _vortex_set_watchlist_mini_v188b(self, items):
+    _vortex_state_authority_init_v188(self)
+
+    try:
+        new_items = _vortex_clean_watchlist_items_v188b(items)
+    except Exception:
+        new_items = []
+
+    async with self._lock:
+        terminal = self.state.setdefault("terminal", {})
+        prev_state = _vortex_clean_watchlist_items_v188b(terminal.get("watchlist_mini", []) or [])
+        prev_memory = _vortex_clean_watchlist_items_v188b(getattr(self, "_last_non_empty_watchlist", []) or [])
+
+        if not prev_memory:
+            prev_memory = _vortex_load_watchlist_cache_v188b()
+
+        if not new_items:
+            restore = prev_state or prev_memory
+            terminal.setdefault("watchlist_meta", {})
+
+            if restore:
+                terminal["watchlist_mini"] = list(restore)
+                terminal["watchlist_meta"].update({
+                    "preserved_previous": True,
+                    "source": "state" if prev_state else ("memory" if getattr(self, "_last_non_empty_watchlist", []) else "disk_cache"),
+                    "last_empty_swap_skipped": time.time(),
+                    "restored_count": len(restore),
+                    "authority_instance_id": getattr(self, "_authority_instance_id", ""),
+                    "cache_hygiene": "v1.8.8b",
+                })
+                return
+
+            terminal["watchlist_mini"] = []
+            terminal["watchlist_meta"] = {
+                "preserved_previous": False,
+                "source": "empty_no_valid_previous",
+                "last_update_ts": time.time(),
+                "count": 0,
+                "authority_instance_id": getattr(self, "_authority_instance_id", ""),
+                "cache_hygiene": "v1.8.8b",
+            }
+            return
+
+        self._last_non_empty_watchlist = list(new_items)
+        self._last_non_empty_watchlist_ts = time.time()
+        _vortex_save_watchlist_cache_v188b(new_items)
+
+        terminal["watchlist_mini"] = new_items
+        terminal.setdefault("watchlist_meta", {})
+        terminal["watchlist_meta"].update({
+            "preserved_previous": False,
+            "source": "fresh",
+            "last_update_ts": time.time(),
+            "count": len(new_items),
+            "memory_count": len(self._last_non_empty_watchlist),
+            "authority_instance_id": getattr(self, "_authority_instance_id", ""),
+            "cache_hygiene": "v1.8.8b",
+        })
+
+
+async def _vortex_get_dashboard_state_v188b(self):
+    _vortex_state_authority_init_v188(self)
+
+    async with self._lock:
+        self.state["system"]["sys_logs"] = list(self._sys_logs)
+        self.state.setdefault("meta", {})
+        self.state["meta"]["state_authority_id"] = getattr(self, "_authority_instance_id", "")
+
+        terminal = self.state.setdefault("terminal", {})
+        current = _vortex_clean_watchlist_items_v188b(terminal.get("watchlist_mini", []) or [])
+        memory = _vortex_clean_watchlist_items_v188b(getattr(self, "_last_non_empty_watchlist", []) or [])
+        if not memory:
+            memory = _vortex_load_watchlist_cache_v188b()
+
+        if current:
+            terminal["watchlist_mini"] = current
+        elif memory:
+            terminal["watchlist_mini"] = list(memory)
+            terminal.setdefault("watchlist_meta", {})
+            terminal["watchlist_meta"].update({
+                "preserved_previous": True,
+                "source": "dashboard_memory_restore" if getattr(self, "_last_non_empty_watchlist", []) else "dashboard_disk_cache_restore",
+                "restored_count": len(memory),
+                "restored_ts": time.time(),
+                "authority_instance_id": getattr(self, "_authority_instance_id", ""),
+                "cache_hygiene": "v1.8.8b",
+            })
+
+        return copy.deepcopy(self.state)
+
+
+async def _vortex_update_planner_market_data_v188b(self, snapshot):
+    if not isinstance(snapshot, dict):
+        return
+
+    new_symbols = snapshot.get("symbols", {}) or {}
+    new_count = len(new_symbols) if isinstance(new_symbols, dict) else 0
+
+    async with self._lock:
+        planner = self.state.setdefault("planner", {"market_data": {}, "ideas": [], "spot_planner": {}})
+        old_snapshot = planner.get("market_data", {}) or {}
+        old_symbols = old_snapshot.get("symbols", {}) if isinstance(old_snapshot, dict) else {}
+        old_count = len(old_symbols) if isinstance(old_symbols, dict) else 0
+
+        # Guard: do not replace a healthy planner snapshot with tiny/empty refresh.
+        if old_count >= 20 and new_count < max(10, int(old_count * 0.45)):
+            planner.setdefault("market_meta", {})
+            planner["market_meta"].update({
+                "preserved_previous": True,
+                "source": "planner_snapshot_guard",
+                "old_count": old_count,
+                "new_count": new_count,
+                "skipped_ts": time.time(),
+            })
+            return
+
+        planner["market_data"] = snapshot
+        planner.setdefault("market_meta", {})
+        planner["market_meta"].update({
+            "preserved_previous": False,
+            "source": "fresh",
+            "symbols": new_count,
+            "updated_ts": time.time(),
+        })
+
+
+try:
+    StateManager.set_watchlist_mini = _vortex_set_watchlist_mini_v188b
+    StateManager.get_dashboard_state = _vortex_get_dashboard_state_v188b
+    StateManager.update_planner_market_data = _vortex_update_planner_market_data_v188b
+except Exception:
+    pass
+# --- END VORTEX v1.8.8b CACHE HYGIENE + PLANNER STABILITY ---
+
+
+
+# --- VORTEX v1.8.8c_fix SINGLETON STATE AUTHORITY LOCK ---
+# Safe version:
+# - keeps original StateManager initialization model intact
+# - uses class-level _instance instead of object.__new__
+# - records repeated StateManager() calls for audit
+
+import traceback as _vortex_traceback
+
+_VORTEX_STATE_REUSE_COUNT = 0
+_VORTEX_STATE_REUSE_TRACES = []
+
+
+def _vortex_state_new_v188c_fix(cls, *args, **kwargs):
+    global _VORTEX_STATE_REUSE_COUNT
+    global _VORTEX_STATE_REUSE_TRACES
+
+    if getattr(cls, "_instance", None) is None:
+        inst = super(StateManager, cls).__new__(cls)
+        cls._instance = inst
+        try:
+            inst._initialized = False
+            inst._authority_instance_id = f"StateManagerSingleton:{id(inst)}:{int(time.time())}"
+            inst._authority_created_ts = time.time()
+        except Exception:
+            pass
+        return inst
+
+    _VORTEX_STATE_REUSE_COUNT += 1
+    try:
+        trace = "".join(_vortex_traceback.format_stack(limit=8))
+        _VORTEX_STATE_REUSE_TRACES.append({
+            "ts": time.time(),
+            "reuse_count": _VORTEX_STATE_REUSE_COUNT,
+            "trace": trace,
+        })
+        if len(_VORTEX_STATE_REUSE_TRACES) > 10:
+            _VORTEX_STATE_REUSE_TRACES = _VORTEX_STATE_REUSE_TRACES[-10:]
+    except Exception:
+        pass
+
+    return cls._instance
+
+
+def _vortex_state_singleton_meta_v188c_fix(self):
+    return {
+        "singleton_id": getattr(self, "_authority_instance_id", f"StateManagerSingleton:{id(self)}"),
+        "created_ts": float(getattr(self, "_authority_created_ts", 0.0) or 0.0),
+        "reuse_count": _VORTEX_STATE_REUSE_COUNT,
+        "current_object_id": id(self),
+        "recent_reuse_traces_count": len(_VORTEX_STATE_REUSE_TRACES),
+    }
+
+
+async def _vortex_get_dashboard_state_v188c_fix(self):
+    try:
+        if "_vortex_get_dashboard_state_v188b" in globals():
+            res = await _vortex_get_dashboard_state_v188b(self)
+        elif "_vortex_get_dashboard_state_v188" in globals():
+            res = await _vortex_get_dashboard_state_v188(self)
+        else:
+            async with self._lock:
+                self.state["system"]["sys_logs"] = list(self._sys_logs)
+                res = copy.deepcopy(self.state)
+
+        res.setdefault("meta", {})
+        res["meta"]["state_singleton"] = _vortex_state_singleton_meta_v188c_fix(self)
+        res["meta"]["state_authority_id"] = res["meta"]["state_singleton"].get("singleton_id", "")
+        return res
+    except Exception:
+        async with self._lock:
+            self.state.setdefault("meta", {})
+            self.state["meta"]["state_singleton"] = _vortex_state_singleton_meta_v188c_fix(self)
+            self.state["meta"]["state_authority_id"] = self.state["meta"]["state_singleton"].get("singleton_id", "")
+            self.state["system"]["sys_logs"] = list(self._sys_logs)
+            return copy.deepcopy(self.state)
+
+
+async def _vortex_get_runtime_snapshot_v188c_fix(self):
+    res = await self.get_dashboard_state()
+    try:
+        uptime_sec = int(time.time() - self._started_ts)
+        res.setdefault("system", {})
+        res["system"]["uptime"] = time.strftime('%H:%M:%S', time.gmtime(uptime_sec))
+    except Exception:
+        pass
+    return res
+
+
+def _vortex_get_state_singleton_debug_v188c_fix(self):
+    return {
+        "meta": _vortex_state_singleton_meta_v188c_fix(self),
+        "recent_reuse_traces": list(_VORTEX_STATE_REUSE_TRACES),
+    }
+
+
+try:
+    StateManager.__new__ = staticmethod(_vortex_state_new_v188c_fix)
+    StateManager.get_dashboard_state = _vortex_get_dashboard_state_v188c_fix
+    StateManager.get_runtime_snapshot = _vortex_get_runtime_snapshot_v188c_fix
+    StateManager.get_state_singleton_debug = _vortex_get_state_singleton_debug_v188c_fix
+except Exception:
+    pass
+# --- END VORTEX v1.8.8c_fix SINGLETON STATE AUTHORITY LOCK ---
+

@@ -10,3 +10,5 @@ trades_state.json
 backups/
 _updates/
 .env
+# VORTEX runtime files
+_runtime/
