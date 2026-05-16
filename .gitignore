@@ -24,3 +24,5 @@ _runtime/shadow_adaptive_replay.json
 _runtime/daily_snapshots/
 
 _runtime/adaptive_be_candidates.json
+
+_runtime/shadow_policy_simulation.json
