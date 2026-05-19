@@ -26,3 +26,13 @@ _runtime/daily_snapshots/
 _runtime/adaptive_be_candidates.json
 
 _runtime/shadow_policy_simulation.json
+
+_runtime/trade_diagnostics.jsonl
+
+_runtime/trade_diagnostics_active.json
+
+_runtime/entry_argument_snapshots.jsonl
+
+_runtime/exit_diagnostics_summary.json
+
+_runtime/shadow_variant_results.json

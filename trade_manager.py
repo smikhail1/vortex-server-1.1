@@ -189,6 +189,10 @@ class TradeManager:
         elif data.get("closed") or reason in {"SL", "TP1", "TP2", "BU", "BE", "TIMEOUT", "PROFIT_TIMEOUT", "FADE", "SETUP_DIED", "STALL", "LIQ", "AGGRESSIVE_BE", "SMART_TIMEOUT_TRAIL"}:
             await self._add_sys_log(state, "🔴 [FUT CLOSED]", f"{symbol} CLOSED {reason} @ {px:.8f}")
             self._log_info("FUT CLOSED", reason, {"symbol": symbol, "price": px, "pnl_net": pnl_n})
+            try:
+                self._vortex_diag_finalize_close(data, fallback_pos, "FUT")
+            except Exception:
+                pass
             self._safe_log_trade(trade_logger, data, fallback_pos, "FUT")
             self._safe_register_close(risk_manager, symbol, "fut", pnl_n, reason)
             self._safe_position_event("CLOSED", {"symbol": symbol, "market": "FUT", "reason": reason, "price": px, "pnl_net": pnl_n, "data": data})
@@ -200,6 +204,11 @@ class TradeManager:
         dashboard = await state.get_dashboard_state()
         price = await self._get_futures_price(symbol, dashboard)
         if price <= 0: return
+
+        try:
+            self._vortex_diag_update_position(pos, "FUT", price, dashboard)
+        except Exception:
+            pass
 
         try: self._safe_position_update_obj(router.get_futures_position(), "FUT", current_price=price)
         except Exception as e: self._log_error("TRADE_MANAGER", f"update_obj failed: {e}")
@@ -244,6 +253,11 @@ class TradeManager:
         for symbol, pos in list(positions.items()):
             price = self._get_cached_state_price(symbol, dashboard)
             if price <= 0: continue
+
+            try:
+                self._vortex_diag_update_position(pos, "SPOT", price, dashboard)
+            except Exception:
+                pass
             
             try: self._safe_position_update_obj(router.get_spot_position(symbol), "SPOT", current_price=price)
             except Exception as e: self._log_error("TRADE_MANAGER", f"spot update_obj failed: {e}")
@@ -259,8 +273,83 @@ class TradeManager:
                         self._safe_position_event(reason, {"symbol": symbol, "market": "SPOT", "event": reason, "price": px, "pnl_net": pnl_n, "data": data})
                     elif data.get("closed") or reason in {"SL","TP1","TP2","BU","BE","TIMEOUT","FADE","STALL"}:
                         await self._add_sys_log(state, "🔴 [SPOT CLOSED]", f"{symbol} {reason}")
+                        try:
+                            self._vortex_diag_finalize_close(data, pos, "SPOT")
+                        except Exception:
+                            pass
                         self._safe_log_trade(trade_logger, data, pos, "SPOT")
                         self._safe_register_close(risk_manager, symbol, "spot", pnl_n, reason)
                         self._safe_position_event("CLOSED", {"symbol": symbol, "market": "SPOT", "reason": reason, "price": px, "pnl_net": pnl_n, "data": data})
             except Exception as e:
                 self._log_error("TRADE_MANAGER", f"check_spot_position failed for {symbol}: {e}")
+
+
+# --- VORTEX v1.8.10_fix TRADE OUTCOME RECORDER COMPAT ---
+try:
+    from trade_outcome_recorder import TradeOutcomeRecorder
+
+    if not hasattr(TradeManager, "_vortex_v1810_outcome_wrapped"):
+        _vortex_tm_safe_log_trade_original_v1810 = TradeManager._safe_log_trade
+
+        def _vortex_tm_safe_log_trade_v1810(self, trade_logger, data, fallback_pos, market):
+            result = _vortex_tm_safe_log_trade_original_v1810(self, trade_logger, data, fallback_pos, market)
+
+            try:
+                d = data if isinstance(data, dict) else {}
+                fp = fallback_pos if isinstance(fallback_pos, dict) else {}
+                reason = safe_str(d.get("reason"), "CLOSE").upper()
+
+                if reason == "OPEN":
+                    return result
+
+                recorder = getattr(self, "outcome_recorder", None)
+                if recorder is None:
+                    recorder = TradeOutcomeRecorder(logger=getattr(self, "logger", None))
+                    self.outcome_recorder = recorder
+
+                recorder.record_close(
+                    data=d,
+                    fallback_pos=fp,
+                    market=market,
+                )
+
+            except Exception as exc:
+                try:
+                    self._log_warning("ANALYTICS", "trade outcome record failed", {
+                        "symbol": safe_str((data or {}).get("symbol") or (fallback_pos or {}).get("symbol")).upper(),
+                        "market": market,
+                        "error": str(exc),
+                    })
+                except Exception:
+                    pass
+
+            return result
+
+        TradeManager._safe_log_trade = _vortex_tm_safe_log_trade_v1810
+        TradeManager._vortex_v1810_outcome_wrapped = True
+
+except Exception:
+    pass
+# --- END VORTEX v1.8.10_fix TRADE OUTCOME RECORDER COMPAT ---
+
+
+
+# --- VORTEX v1.8.19d TRADE DIAGNOSTICS LAYER ---
+try:
+    from trade_diagnostics import TradeDiagnosticsRecorder
+    def _vortex_diag_get_recorder_v1819d(self):
+        recorder=getattr(self,"trade_diagnostics_recorder",None)
+        if recorder is None:
+            recorder=TradeDiagnosticsRecorder(logger=getattr(self,"logger",None))
+            self.trade_diagnostics_recorder=recorder
+        return recorder
+    def _vortex_diag_update_position_v1819d(self,pos,market,current_price,snapshot=None):
+        _vortex_diag_get_recorder_v1819d(self).update_position(pos=pos if isinstance(pos,dict) else {},market=market,current_price=current_price,snapshot=snapshot if isinstance(snapshot,dict) else {})
+    def _vortex_diag_finalize_close_v1819d(self,data,fallback_pos,market):
+        return _vortex_diag_get_recorder_v1819d(self).finalize_close(data=data if isinstance(data,dict) else {},fallback_pos=fallback_pos if isinstance(fallback_pos,dict) else {},market=market)
+    TradeManager._vortex_diag_get_recorder=_vortex_diag_get_recorder_v1819d
+    TradeManager._vortex_diag_update_position=_vortex_diag_update_position_v1819d
+    TradeManager._vortex_diag_finalize_close=_vortex_diag_finalize_close_v1819d
+except Exception:
+    pass
+# --- END VORTEX v1.8.19d TRADE DIAGNOSTICS LAYER ---

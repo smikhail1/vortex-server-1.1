@@ -335,5 +335,16 @@ class TradeSnapshotRecorder:
                     self.logger.warning("ANALYTICS", "trade snapshot write failed", {"symbol": snapshot["symbol"], "market": snapshot["market"], "error": str(exc)})
                 except Exception:
                     pass
+        # --- VORTEX v1.8.19d ENTRY ARGUMENT RECORDER HOOK ---
+        try:
+            from entry_argument_recorder import EntryArgumentRecorder
+            EntryArgumentRecorder(logger=self.logger).record(snapshot)
+        except Exception as exc:
+            if self.logger:
+                try:
+                    self.logger.warning("ANALYTICS", "entry argument record failed", {"symbol": snapshot.get("symbol"), "error": str(exc)})
+                except Exception:
+                    pass
+        # --- END VORTEX v1.8.19d ENTRY ARGUMENT RECORDER HOOK ---
         return snapshot
 
