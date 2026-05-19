@@ -36,3 +36,5 @@ _runtime/entry_argument_snapshots.jsonl
 _runtime/exit_diagnostics_summary.json
 
 _runtime/shadow_variant_results.json
+
+_runtime/fee_cover_shadow_guard.json

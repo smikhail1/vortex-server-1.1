@@ -204,3 +204,49 @@ except Exception:
     pass
 # --- END VORTEX v1.8.5b ROUTER RUNTIME SNAPSHOT ---
 
+
+
+# --- VORTEX v1.8.19e MULTI FUTURES ROUTER ---
+try:
+    def _router_all_fut(self):
+        try:
+            if self.fut_mode=='PAPER' and hasattr(self.paper_futures,'get_all_positions'):
+                return self.paper_futures.get_all_positions()
+            pos=self.get_futures_position() if hasattr(self,'get_futures_position') else None
+            if pos is None: return {}
+            sym=str(getattr(pos,'symbol','') or 'FUT').upper()
+            return {sym:pos}
+        except Exception: return {}
+
+    def _router_get_fut(self,symbol=None):
+        try:
+            if self.fut_mode=='PAPER' and hasattr(self.paper_futures,'get_position'):
+                return self.paper_futures.get_position(symbol)
+        except TypeError:
+            return self.paper_futures.get_position()
+        except Exception:
+            return None
+        return None
+
+    def _router_check_fut_sym(self,symbol,price):
+        try:
+            if self.fut_mode=='PAPER' and hasattr(self.paper_futures,'check_position'):
+                return self.paper_futures.check_position(symbol,price)
+        except Exception: return None
+        return None
+
+    def _router_close_fut_sym(self,symbol,price,reason='MANUAL'):
+        try:
+            if self.fut_mode=='PAPER': return self.paper_futures.close_position(price,reason,symbol=symbol)
+        except TypeError:
+            return self.paper_futures.close_position(price,reason)
+        except Exception: return None
+        return None
+
+    ExecutionRouter.get_all_futures_positions=_router_all_fut
+    ExecutionRouter.get_futures_position=_router_get_fut
+    ExecutionRouter.check_futures_position_for_symbol=_router_check_fut_sym
+    ExecutionRouter.close_futures_position_for_symbol=_router_close_fut_sym
+except Exception:
+    pass
+# --- END VORTEX v1.8.19e MULTI FUTURES ROUTER ---

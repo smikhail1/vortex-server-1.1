@@ -353,3 +353,46 @@ try:
 except Exception:
     pass
 # --- END VORTEX v1.8.19d TRADE DIAGNOSTICS LAYER ---
+
+
+# --- VORTEX v1.8.19e MULTI FUTURES TRADE MANAGER ---
+try:
+    async def _tm_process_futures_multi(self,state,router,trade_logger=None,risk_manager=None,open_close_lock=None):
+        try:
+            positions=router.get_all_futures_positions() if hasattr(router,'get_all_futures_positions') else {}
+            positions=positions or {}
+            if not positions:
+                pos=self._get_futures_position(router)
+                if not pos: return
+                p=self._position_to_dict(pos); sym=safe_str(p.get('symbol')).upper()
+                if not sym: return
+                positions={sym:pos}
+            dashboard=await state.get_dashboard_state()
+            for symbol,raw_pos in list(positions.items()):
+                pos=self._position_to_dict(raw_pos); symbol=safe_str(pos.get('symbol') or symbol).upper()
+                if not symbol: continue
+                price=await self._get_futures_price(symbol,dashboard)
+                if price<=0: continue
+                try: self._vortex_diag_update_position(pos,'FUT',price,dashboard)
+                except Exception: pass
+                try: self._safe_position_update_obj(raw_pos,'FUT',current_price=price)
+                except Exception as e: self._log_error('TRADE_MANAGER',f'multi futures update_obj failed: {e}')
+                ta_item=self._get_ta_item(symbol,dashboard)
+                guide_dec=self.guide.evaluate(pos,price,ta_item=ta_item)
+                action,reason=safe_str(guide_dec.get('action')).upper(),safe_str(guide_dec.get('reason'))
+                if action=='CLOSE':
+                    try:
+                        res=router.close_futures_position_for_symbol(symbol,price,reason=reason) if hasattr(router,'close_futures_position_for_symbol') else router.close_futures_position(price,reason)
+                        await self._handle_futures_result(state,res,symbol,price,pos,trade_logger,risk_manager)
+                    except Exception as e: self._log_error('TRADE_MANAGER',f'multi close_futures_position failed: {e}',{'trace':traceback.format_exc()})
+                    continue
+                try:
+                    res=router.check_futures_position_for_symbol(symbol,price) if hasattr(router,'check_futures_position_for_symbol') else router.check_futures_position(price)
+                    await self._handle_futures_result(state,res,symbol,price,pos,trade_logger,risk_manager)
+                except Exception as e: self._log_error('TRADE_MANAGER',f'multi check_futures_position failed for {symbol}: {e}',{'trace':traceback.format_exc()})
+        except Exception as exc:
+            self._log_error('TRADE_MANAGER',f'process_futures_multi critical crash: {exc}',{'trace':traceback.format_exc()})
+    TradeManager.process_futures=_tm_process_futures_multi
+except Exception:
+    pass
+# --- END VORTEX v1.8.19e MULTI FUTURES TRADE MANAGER ---
