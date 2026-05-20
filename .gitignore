@@ -38,3 +38,13 @@ _runtime/exit_diagnostics_summary.json
 _runtime/shadow_variant_results.json
 
 _runtime/fee_cover_shadow_guard.json
+
+_runtime/research_reports/
+
+_runtime/research_report_latest.json
+
+_runtime/entry_quality_matrix.json
+
+_analysis/vortex_research_snapshot_*.tar.gz
+
+_analysis/vortex_research_snapshot_*.json

@@ -6,6 +6,7 @@ from config import CONFIG
 from exchange_intelligence import ExchangeIntelligenceService
 from decision_engine import DecisionEngine
 from defensive_gates import DefensiveGates
+from trade_snapshot_recorder import TradeSnapshotRecorder
 from execution_router import ExecutionRouter
 from logger import Logger
 from loop_runner import create_task
@@ -356,6 +357,7 @@ async def strategy_loop(
     screener=None,
     logger=None,
     open_close_lock=None,
+    trade_snapshot_recorder=None,
 ) -> None:
     while True:
         try:
@@ -709,6 +711,34 @@ async def strategy_loop(
                             args_text=safe_str(analysis.get("args_text")),
                         )
 
+                        if trade_snapshot_recorder:
+                            try:
+                                trade_snapshot_recorder.record_open(
+                                    symbol=sym,
+                                    market="FUT",
+                                    side=side,
+                                    result=result,
+                                    current=current,
+                                    analysis=analysis,
+                                    watch=item,
+                                    planner_idea=planner_map.get(sym),
+                                    ladder=ladder,
+                                    risk_status=risk_status,
+                                    macro_filter=macro_filter,
+                                    order={
+                                        "qty": qty,
+                                        "entry": result["data"].get("entry"),
+                                        "margin_usdt": CONFIG.trading.futures_margin_usdt,
+                                        "leverage": ladder.get("leverage", 3.0),
+                                    },
+                                )
+                            except Exception as exc:
+                                if logger:
+                                    logger.warning("ANALYTICS", "futures snapshot record failed", {
+                                        "symbol": sym,
+                                        "error": str(exc),
+                                    })
+
                         current_fut_open_count += 1
 
                         if current_fut_open_count >= risk_status["max_open_futures_positions"]:
@@ -929,6 +959,33 @@ async def strategy_loop(
                             args_text=safe_str(analysis.get("args_text")),
                         )
 
+                        if trade_snapshot_recorder:
+                            try:
+                                trade_snapshot_recorder.record_open(
+                                    symbol=sym,
+                                    market="SPOT",
+                                    side="BUY",
+                                    result=result,
+                                    current=current,
+                                    analysis=analysis,
+                                    watch=item,
+                                    planner_idea=planner_map.get(sym),
+                                    ladder={"tp": tp, "sl": ladder.get("sl"), "tp2": ladder.get("tp2")},
+                                    risk_status=risk_status,
+                                    macro_filter=macro_filter,
+                                    order={
+                                        "qty": qty,
+                                        "entry": result["data"].get("entry"),
+                                        "order_usdt": order_usdt,
+                                    },
+                                )
+                            except Exception as exc:
+                                if logger:
+                                    logger.warning("ANALYTICS", "spot snapshot record failed", {
+                                        "symbol": sym,
+                                        "error": str(exc),
+                                    })
+
                         current_spot_open_count += 1
 
                         if current_spot_open_count >= risk_status["max_open_spot_positions"]:
@@ -1015,6 +1072,7 @@ async def main() -> None:
 
     position_state_engine = PositionStateEngine(logger=logger)
     trade_manager = TradeManager(logger=logger, position_state_engine=position_state_engine)
+    trade_snapshot_recorder = TradeSnapshotRecorder(logger=logger)
 
     planner_provider = PlannerDataProvider(logger=logger)
     planner_engine = SpotPlannerEngine(logger=logger)
@@ -1066,6 +1124,7 @@ async def main() -> None:
                 screener=screener,
                 logger=logger,
                 open_close_lock=open_close_lock,
+                trade_snapshot_recorder=trade_snapshot_recorder,
             ),
             name="strategy",
         ),
