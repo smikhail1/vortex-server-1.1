@@ -96,7 +96,7 @@ class UniverseConfig:
 @dataclass(frozen=True)
 class TradingConfig:
     mode: str = "PAPER"
-    futures_margin_usdt: float = 1.0  # v1.8.19e research mode
+    futures_margin_usdt: float = 20.0
     spot_order_usdt: float = 20.0
     futures_default_leverage: float = 3.0
     futures_min_score_to_open: int = 7
@@ -120,7 +120,7 @@ class RiskConfig:
     spot_symbol_cooldown_sec: int = 1800
     max_trades_per_symbol_per_day: int = 5
     daily_loss_limit_usdt: float = -5.0
-    max_open_futures_positions: int = 4  # v1.8.19e research mode: multi paper futures telemetry
+    max_open_futures_positions: int = 1  # v1.8.1: PaperFutures currently supports one open futures position
     max_open_spot_positions: int = 5
     loss_streak_limit: int = 3
     loss_streak_cooldown_sec: int = 14400
