@@ -45,8 +45,34 @@ class TradeDiagnosticsRecorder:
         entry=safe_float(data.get('entry') or fallback_pos.get('entry') or row.get('entry_price'),0.0)
         exit_price=safe_float(data.get('exit_price') or data.get('price') or row.get('last_price'),0.0)
         side=safe_str(data.get('side') or fallback_pos.get('side') or row.get('side')).upper(); reason=safe_str(data.get('reason'),'CLOSE').upper()
-        final_pct=self._pnl_pct(entry,exit_price,side) if entry>0 and exit_price>0 else 0.0; mfe=safe_float(row.get('mfe_pct'),0.0); mae=safe_float(row.get('mae_pct'),0.0)
-        diag={'schema':'vortex.trade_diagnostics.v1','schema_version':'1.8.19d','ts':now,'symbol':symbol,'market':safe_str(market).upper(),'side':side,'setup_type':safe_str(data.get('setup_type') or fallback_pos.get('setup_type') or row.get('setup_type')),'args_text':safe_str(data.get('args_text') or fallback_pos.get('args_text') or row.get('args_text')),'entry_price':entry,'exit_price':exit_price,'close_reason':reason,'pnl_net':safe_float(data.get('pnl_net'),0.0),'final_pnl_pct_est':round(final_pct,8),'hold_sec':int(safe_float(data.get('hold_sec'),0.0) or max(0.0,now-safe_float(row.get('first_seen_ts'),now))),'mfe_pct':round(mfe,8),'mae_pct':round(mae,8),'time_to_mfe_sec':int(safe_float(row.get('time_to_mfe_sec'),0)),'time_in_profit_sec':int(safe_float(row.get('time_in_profit_sec'),0)),'updates':int(safe_float(row.get('updates'),0)),'entry_quality':{'had_positive_excursion':mfe>0,'mfe_gt_abs_mae':mfe>abs(mae),'mfe_minus_final_pct':round(mfe-final_pct,8),'exit_gave_back_pct':round(max(0.0,mfe-final_pct),8)},'be_damage':{'is_be_like':reason in {'BU','BE','BREAKEVEN','AGGRESSIVE_BE'},'had_profit_before_be':reason in {'BU','BE','BREAKEVEN','AGGRESSIVE_BE'} and mfe>0,'potential_pct_left':round(max(0.0,mfe-final_pct),8)},'fee_cover_hint':{'small_green_possible':mfe>0.04 and final_pct<=0.02,'mfe_pct_threshold_used':0.04}}
+        mfe=safe_float(row.get('mfe_pct'),0.0); mae=safe_float(row.get('mae_pct'),0.0)
+
+        # VORTEX v1.8.19i:
+        # Guard analytics from corrupted/ambiguous close price.
+        # Trading execution is NOT changed here. This affects diagnostics only.
+        raw_final_pct = self._pnl_pct(entry,exit_price,side) if entry>0 and exit_price>0 else 0.0
+        suspicious_price_scale = False
+        suspicious_reasons = []
+
+        if entry <= 0:
+            suspicious_price_scale = True
+            suspicious_reasons.append('missing_or_invalid_entry')
+        if exit_price <= 0:
+            suspicious_price_scale = True
+            suspicious_reasons.append('missing_or_invalid_exit_price')
+
+        if entry > 0 and exit_price > 0:
+            ratio = exit_price / entry
+            if ratio < 0.2 or ratio > 5.0:
+                suspicious_price_scale = True
+                suspicious_reasons.append('exit_entry_ratio_out_of_bounds')
+            if abs(raw_final_pct) > 20.0:
+                suspicious_price_scale = True
+                suspicious_reasons.append('final_pct_out_of_bounds')
+
+        final_pct = 0.0 if suspicious_price_scale else raw_final_pct
+
+        diag={'schema':'vortex.trade_diagnostics.v1','schema_version':'1.8.19i','ts':now,'symbol':symbol,'market':safe_str(market).upper(),'side':side,'setup_type':safe_str(data.get('setup_type') or fallback_pos.get('setup_type') or row.get('setup_type')),'args_text':safe_str(data.get('args_text') or fallback_pos.get('args_text') or row.get('args_text')),'entry_price':entry,'exit_price':exit_price,'close_reason':reason,'pnl_net':safe_float(data.get('pnl_net'),0.0),'final_pnl_pct_est':round(final_pct,8),'raw_final_pnl_pct_est':round(raw_final_pct,8),'diagnostics_guard':{'suspicious_price_scale':suspicious_price_scale,'reasons':suspicious_reasons},'hold_sec':int(safe_float(data.get('hold_sec'),0.0) or max(0.0,now-safe_float(row.get('first_seen_ts'),now))),'mfe_pct':round(mfe,8),'mae_pct':round(mae,8),'time_to_mfe_sec':int(safe_float(row.get('time_to_mfe_sec'),0)),'time_in_profit_sec':int(safe_float(row.get('time_in_profit_sec'),0)),'updates':int(safe_float(row.get('updates'),0)),'entry_quality':{'had_positive_excursion':mfe>0,'mfe_gt_abs_mae':mfe>abs(mae),'mfe_minus_final_pct':round(mfe-final_pct,8),'exit_gave_back_pct':round(max(0.0,mfe-final_pct),8)},'be_damage':{'is_be_like':reason in {'BU','BE','BREAKEVEN','AGGRESSIVE_BE'},'had_profit_before_be':reason in {'BU','BE','BREAKEVEN','AGGRESSIVE_BE'} and mfe>0,'potential_pct_left':round(max(0.0,mfe-final_pct),8)},'fee_cover_hint':{'small_green_possible':mfe>0.04 and final_pct<=0.02,'mfe_pct_threshold_used':0.04}}
         try:
             with self.output_path.open('a',encoding='utf-8') as f: f.write(json.dumps(diag,ensure_ascii=False,sort_keys=True)+'\n')
         except Exception: pass
