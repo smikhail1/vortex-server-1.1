@@ -95,26 +95,32 @@ class APIServer:
             ),
         }
 
+        spot_free = safe_float(balances.get("spot", 0.0))
+        fut_free = safe_float(balances.get("fut", 0.0))
+
+        spot_open_pnl = sum(safe_float(p.get("pnl_net", 0.0)) for p in spot_positions.values())
+        fut_open_pnl = sum(safe_float(p.get("pnl_net", 0.0)) for p in fut_positions.values())
+
+        # Paper futures balance is FREE balance after reserved margin.
+        # Equity must add reserved margin back, otherwise the UI shows
+        # a false drawdown equal to locked margin while a position is open.
+        fut_margin_used = sum(safe_float(p.get("margin", 0.0)) for p in fut_positions.values())
+        fut_notional_open = sum(safe_float(p.get("notional", 0.0)) for p in fut_positions.values())
+
+        spot_equity = spot_free + spot_open_pnl
+        fut_equity = fut_free + fut_margin_used + fut_open_pnl
+
         dashboard["portfolio"] = {
-            "spot_free": round(safe_float(balances.get("spot", 0.0)), 4),
-            "spot_equity": round(
-                safe_float(balances.get("spot", 0.0))
-                + sum(safe_float(p.get("pnl_net", 0.0)) for p in spot_positions.values()),
-                4,
-            ),
-            "fut_free": round(safe_float(balances.get("fut", 0.0)), 4),
-            "fut_equity": round(
-                safe_float(balances.get("fut", 0.0))
-                + sum(safe_float(p.get("pnl_net", 0.0)) for p in fut_positions.values()),
-                4,
-            ),
-            "total_equity": round(
-                safe_float(balances.get("spot", 0.0))
-                + safe_float(balances.get("fut", 0.0))
-                + sum(safe_float(p.get("pnl_net", 0.0)) for p in spot_positions.values())
-                + sum(safe_float(p.get("pnl_net", 0.0)) for p in fut_positions.values()),
-                4,
-            ),
+            "spot_free": round(spot_free, 4),
+            "spot_equity": round(spot_equity, 4),
+
+            "fut_free": round(fut_free, 4),
+            "fut_margin_used": round(fut_margin_used, 4),
+            "fut_notional_open": round(fut_notional_open, 4),
+            "fut_open_pnl": round(fut_open_pnl, 4),
+            "fut_equity": round(fut_equity, 4),
+
+            "total_equity": round(spot_equity + fut_equity, 4),
         }
 
         dashboard["counts"] = {
