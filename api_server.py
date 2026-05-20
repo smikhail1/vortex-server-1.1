@@ -82,17 +82,50 @@ class APIServer:
         spot_positions = dashboard.get("positions", {}).get("spot", {}) or {}
         balances = dashboard.get("account", {}).get("balances", {}) or {}
 
+        # Build daily realized/open PnL.
+        # Realized PnL is calculated from trades_state.json closed trades.
+        # Open PnL is calculated from current dashboard live positions.
+        import json as _json
+        import time as _time
+        from pathlib import Path as _Path
+
+        now_ts = _time.time()
+        lt = _time.localtime(now_ts)
+        today_start_ts = _time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, lt.tm_wday, lt.tm_yday, lt.tm_isdst))
+
+        today_realized_fut = 0.0
+        today_realized_spot = 0.0
+
+        try:
+            st_path = _Path("trades_state.json")
+            if st_path.exists():
+                st = _json.loads(st_path.read_text(encoding="utf-8"))
+                for closed_trade in st.get("closed", []) or []:
+                    closed_at = safe_float(closed_trade.get("closed_at", 0.0))
+                    if closed_at < today_start_ts:
+                        continue
+
+                    pnl_net = safe_float(closed_trade.get("pnl_net", 0.0))
+                    market = str(closed_trade.get("market", "")).upper()
+
+                    if market in {"FUT", "FUTURES"}:
+                        today_realized_fut += pnl_net
+                    elif market == "SPOT":
+                        today_realized_spot += pnl_net
+        except Exception:
+            today_realized_fut = 0.0
+            today_realized_spot = 0.0
+
+        today_open_fut = sum(safe_float(p.get("pnl_net", 0.0)) for p in fut_positions.values())
+        today_open_spot = sum(safe_float(p.get("pnl_net", 0.0)) for p in spot_positions.values())
+
         dashboard["today"] = {
-            "today_realized_fut": 0.0,
-            "today_realized_spot": 0.0,
-            "today_total_realized": 0.0,
-            "today_open_fut": round(sum(safe_float(p.get("pnl_net", 0.0)) for p in fut_positions.values()), 4),
-            "today_open_spot": round(sum(safe_float(p.get("pnl_net", 0.0)) for p in spot_positions.values()), 4),
-            "today_total_open": round(
-                sum(safe_float(p.get("pnl_net", 0.0)) for p in fut_positions.values())
-                + sum(safe_float(p.get("pnl_net", 0.0)) for p in spot_positions.values()),
-                4,
-            ),
+            "today_realized_fut": round(today_realized_fut, 4),
+            "today_realized_spot": round(today_realized_spot, 4),
+            "today_total_realized": round(today_realized_fut + today_realized_spot, 4),
+            "today_open_fut": round(today_open_fut, 4),
+            "today_open_spot": round(today_open_spot, 4),
+            "today_total_open": round(today_open_fut + today_open_spot, 4),
         }
 
         spot_free = safe_float(balances.get("spot", 0.0))
