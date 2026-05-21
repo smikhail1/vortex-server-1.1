@@ -642,6 +642,42 @@ async def strategy_loop(
                                 current_open_count=current_fut_open_count,
                                 max_open_positions=risk_status_locked["max_open_futures_positions"],
                             )
+
+                            # VORTEX v1.8.19j-r2: post-close cooldown + pre-open guards.
+                            # This mutates decision_locked before the existing block branch.
+                            if decision_locked.get("allow"):
+                                try:
+                                    from post_close_cooldown import can_open_futures
+                                    guard_decision = can_open_futures(
+                                        symbol=sym,
+                                        side=side,
+                                        setup_type=safe_str(analysis.get("setup_type")),
+                                        analysis=analysis,
+                                        price=price,
+                                        ladder=ladder,
+                                    )
+                                except Exception as exc:
+                                    guard_decision = {"allow": True, "reason": f"guard_error_fail_open:{exc}"}
+                                    if logger:
+                                        logger.warning("RISK", "futures pre-open guard failed open", {
+                                            "symbol": sym,
+                                            "error": str(exc),
+                                        })
+
+                                if not guard_decision.get("allow", True):
+                                    decision_locked = {
+                                        "allow": False,
+                                        "reason": guard_decision.get("reason", "pre_open_guard_blocked"),
+                                    }
+                                    if logger:
+                                        logger.info("RISK", "futures pre-open guard blocked", {
+                                            "symbol": sym,
+                                            "side": side,
+                                            "setup_type": safe_str(analysis.get("setup_type")),
+                                            "reason": decision_locked["reason"],
+                                            "guard": guard_decision,
+                                        })
+
                             if not decision_locked["allow"]:
                                 result = {"code": "LOCKED_BLOCKED", "reason": decision_locked["reason"]}
                                 await state.add_sys_log("⚠️ [FUT WATCH]", f"{sym} locked confirmation blocked | {decision_locked['reason']}")

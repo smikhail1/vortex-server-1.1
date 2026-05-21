@@ -127,6 +127,26 @@ class RiskConfig:
     persistence_enabled: bool = True
     persistence_path: str = "risk_state.json"
 
+    # VORTEX v1.8.19j-r2: post-close cooldown / anti-reentry / pre-open guards
+    post_close_cooldown_enabled: bool = True
+    post_close_cooldown_after_bu_sec: int = 900
+    post_close_cooldown_after_sl_sec: int = 1800
+    post_close_cooldown_after_stall_win_sec: int = 300
+    post_close_cooldown_after_stall_loss_sec: int = 900
+    post_close_cooldown_after_tp2_sec: int = 300
+    post_close_cooldown_default_sec: int = 300
+    post_close_same_setup_cooldown_multiplier: float = 2.0
+
+    futures_preopen_distance_guard_enabled: bool = True
+    min_futures_stop_distance_pct: float = 0.25
+    min_futures_tp0_distance_pct: float = 0.15
+
+    momentum_long_strict_enabled: bool = True
+    momentum_long_min_score: int = 10
+    momentum_long_min_volume_ratio: float = 2.0
+    momentum_long_max_change_pct: float = 14.0
+    momentum_long_max_range_pct: float = 16.0
+
 @dataclass(frozen=True)
 class PositionStateConfig:
     enabled: bool = True

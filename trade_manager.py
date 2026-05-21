@@ -195,6 +195,20 @@ class TradeManager:
                 pass
             self._safe_log_trade(trade_logger, data, fallback_pos, "FUT")
             self._safe_register_close(risk_manager, symbol, "fut", pnl_n, reason)
+
+            # VORTEX v1.8.19j-r2: remember close reason for post-close cooldown / anti-reentry.
+            try:
+                from post_close_cooldown import register_futures_close
+                register_futures_close(
+                    symbol=symbol,
+                    side=safe_str(data.get("side") or fallback_pos.get("side")).upper(),
+                    setup_type=safe_str(data.get("setup_type") or fallback_pos.get("setup_type")),
+                    reason=reason,
+                    pnl_net=pnl_n,
+                )
+            except Exception as e:
+                self._log_error("TRADE_MANAGER", f"post-close cooldown register failed: {e}")
+
             self._safe_position_event("CLOSED", {"symbol": symbol, "market": "FUT", "reason": reason, "price": px, "pnl_net": pnl_n, "data": data})
 
     async def process_futures(self, state, router, trade_logger=None, risk_manager=None, open_close_lock=None) -> None:
