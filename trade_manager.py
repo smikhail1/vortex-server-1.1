@@ -224,6 +224,15 @@ class TradeManager:
         except Exception:
             pass
 
+        # VORTEX v1.8.19k: shadow-only position management telemetry.
+        # This records what the next PositionManagementEngine would have suggested,
+        # without closing or modifying the live/paper position.
+        try:
+            from position_management_shadow_recorder import record_position_management_shadow
+            record_position_management_shadow(pos, current_price=price)
+        except Exception as e:
+            self._log_error("TRADE_MANAGER", f"position management shadow record failed: {e}")
+
         try: self._safe_position_update_obj(router.get_futures_position(), "FUT", current_price=price)
         except Exception as e: self._log_error("TRADE_MANAGER", f"update_obj failed: {e}")
 
