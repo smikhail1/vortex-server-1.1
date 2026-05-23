@@ -255,10 +255,10 @@ class TradeManager:
                 try:
                     if lock:
                         async with lock:
-                            res = router.close_futures_position(price, reason=reason)
+                            res = router.close_futures_position(price, reason)
                             await self._handle_futures_result(state, res, symbol, price, pos, trade_logger, risk_manager)
                     else:
-                        res = router.close_futures_position(price, reason=reason)
+                        res = router.close_futures_position(price, reason)
                         await self._handle_futures_result(state, res, symbol, price, pos, trade_logger, risk_manager)
                 except Exception as e:
                     self._log_error("TRADE_MANAGER", f"weak_progress close failed: {e}", {"trace": traceback.format_exc()})
@@ -278,10 +278,10 @@ class TradeManager:
             try:
                 if lock:
                     async with lock:
-                        res = router.close_futures_position(price, reason=reason)
+                        res = router.close_futures_position(price, reason)
                         await self._handle_futures_result(state, res, symbol, price, pos, trade_logger, risk_manager)
                 else:
-                    res = router.close_futures_position(price, reason=reason)
+                    res = router.close_futures_position(price, reason)
                     await self._handle_futures_result(state, res, symbol, price, pos, trade_logger, risk_manager)
             except Exception as e:
                 self._log_error("TRADE_MANAGER", f"close_futures_position failed: {e}", {"trace": traceback.format_exc()})
