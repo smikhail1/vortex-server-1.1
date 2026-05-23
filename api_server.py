@@ -512,7 +512,7 @@ class APIServer:
         })
 
     async def handle_debug_open_futures(self, request: web.Request) -> web.Response:
-        if not CONFIG.trading.allow_manual_trades or self.router is None:
+        if self.mode != "PAPER" or not CONFIG.trading.allow_manual_trades or self.router is None:
             return web.json_response({"code": "ERROR", "msg": "manual futures disabled"}, status=403)
 
         payload = await request.json()
@@ -536,7 +536,7 @@ class APIServer:
         return web.json_response(result)
 
     async def handle_debug_close_futures(self, request: web.Request) -> web.Response:
-        if not CONFIG.trading.allow_force_close or self.router is None:
+        if self.mode != "PAPER" or not CONFIG.trading.allow_force_close or self.router is None:
             return web.json_response({"code": "ERROR", "msg": "manual futures close disabled"}, status=403)
 
         payload = await request.json()
@@ -675,7 +675,7 @@ class APIServer:
         return web.json_response(response)
 
     async def handle_debug_open_spot(self, request: web.Request) -> web.Response:
-        if not CONFIG.trading.allow_manual_trades or self.router is None:
+        if self.mode != "PAPER" or not CONFIG.trading.allow_manual_trades or self.router is None:
             return web.json_response({"code": "ERROR", "msg": "manual spot disabled"}, status=403)
 
         payload = await request.json()
@@ -695,7 +695,7 @@ class APIServer:
         return web.json_response(result)
 
     async def handle_debug_close_spot(self, request: web.Request) -> web.Response:
-        if not CONFIG.trading.allow_force_close or self.router is None:
+        if self.mode != "PAPER" or not CONFIG.trading.allow_force_close or self.router is None:
             return web.json_response({"code": "ERROR", "msg": "manual spot close disabled"}, status=403)
 
         payload = await request.json()
@@ -713,7 +713,7 @@ class APIServer:
         return web.json_response(result)
 
     async def handle_debug_close_all_spot(self, request: web.Request) -> web.Response:
-        if not CONFIG.trading.allow_force_close or self.router is None:
+        if self.mode != "PAPER" or not CONFIG.trading.allow_force_close or self.router is None:
             return web.json_response({"code": "ERROR", "msg": "manual spot close-all disabled"}, status=403)
 
         payload = await request.json()

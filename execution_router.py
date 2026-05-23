@@ -35,7 +35,7 @@ class ExecutionRouter:
         self.api_passphrase = os.environ.get("BITGET_SUB_PASSPHRASE", "")
         
         if self.api_key and self.api_secret:
-            print(f"[ROUTER] 🔑 Bitget Sub-account API Keys detected! Ready for REAL execution.", flush=True)
+            print("[ROUTER] Bitget API keys detected, but real execution is not implemented in this snapshot.", flush=True)
 
         self.paper_futures = PaperFutures(start_balance=CONFIG.futures.start_balance)
         self.paper_spot = PaperSpot(start_balance=CONFIG.spot.start_balance)
@@ -203,4 +203,252 @@ try:
 except Exception:
     pass
 # --- END VORTEX v1.8.5b ROUTER RUNTIME SNAPSHOT ---
+# --- VORTEX v1.8.21a ROUTER API CONTRACTS ---
+def _vortex_router_first_value_v1821a(args, kwargs, names, default=None):
+    for name in names:
+        if name in kwargs and kwargs.get(name) is not None:
+            return kwargs.get(name)
+    if args:
+        return args[0]
+    return default
 
+
+def _vortex_router_float_v1821a(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _vortex_router_str_v1821a(value, default=""):
+    try:
+        if value is None:
+            return str(default)
+        return str(value)
+    except Exception:
+        return str(default)
+
+
+def _vortex_router_is_paper_v1821a(self, market):
+    market = _vortex_router_str_v1821a(market).lower()
+    if market in {"fut", "future", "futures"}:
+        return _vortex_router_str_v1821a(getattr(self, "fut_mode", "PAPER"), "PAPER").upper() == "PAPER"
+    if market == "spot":
+        return _vortex_router_str_v1821a(getattr(self, "spot_mode", "PAPER"), "PAPER").upper() == "PAPER"
+    return False
+
+
+def _vortex_router_error_v1821a(msg, code="ERROR"):
+    return {"code": code, "msg": _vortex_router_str_v1821a(msg)}
+
+
+def _vortex_router_pos_get_v1821a(pos, *names, default=None):
+    if isinstance(pos, dict):
+        for name in names:
+            if pos.get(name) is not None:
+                return pos.get(name)
+        return default
+    for name in names:
+        try:
+            if hasattr(pos, name):
+                value = getattr(pos, name)
+                if value is not None:
+                    return value
+        except Exception:
+            pass
+    return default
+
+
+def _vortex_close_futures_position_v1821a(self, *args, **kwargs):
+    current_price = _vortex_router_first_value_v1821a(args, kwargs, ("current_price", "price", "p"), 0.0)
+    reason = kwargs.get("reason")
+    if reason is None and len(args) >= 2:
+        reason = args[1]
+    if reason is None:
+        reason = "MANUAL"
+
+    if not _vortex_router_is_paper_v1821a(self, "fut"):
+        return _vortex_router_error_v1821a("futures close is PAPER-only in this snapshot")
+    return self.paper_futures.close_position(_vortex_router_float_v1821a(current_price), _vortex_router_str_v1821a(reason, "MANUAL"))
+
+
+def _vortex_check_futures_position_v1821a(self, *args, **kwargs):
+    current_price = _vortex_router_first_value_v1821a(args, kwargs, ("current_price", "price", "p"), 0.0)
+    if not _vortex_router_is_paper_v1821a(self, "fut"):
+        return None
+    return self.paper_futures.check_stops(_vortex_router_float_v1821a(current_price))
+
+
+def _vortex_close_spot_position_v1821a(self, *args, **kwargs):
+    symbol = kwargs.get("symbol")
+    current_price = kwargs.get("current_price", kwargs.get("price"))
+    reason = kwargs.get("reason", "MANUAL")
+
+    if symbol is None and len(args) >= 1:
+        symbol = args[0]
+    if current_price is None and len(args) >= 2:
+        current_price = args[1]
+    if "reason" not in kwargs and len(args) >= 3:
+        reason = args[2]
+
+    symbol = _vortex_router_str_v1821a(symbol).upper()
+    if not symbol:
+        return _vortex_router_error_v1821a("spot symbol is required")
+    if not _vortex_router_is_paper_v1821a(self, "spot"):
+        return _vortex_router_error_v1821a("spot close is PAPER-only in this snapshot")
+    return self.paper_spot.close_position(symbol, _vortex_router_float_v1821a(current_price), _vortex_router_str_v1821a(reason, "MANUAL"))
+
+
+def _vortex_check_spot_position_v1821a(self, *args, **kwargs):
+    symbol = kwargs.get("symbol")
+    current_price = kwargs.get("current_price", kwargs.get("price"))
+
+    if symbol is None and len(args) >= 1:
+        symbol = args[0]
+    if current_price is None and len(args) >= 2:
+        current_price = args[1]
+
+    symbol = _vortex_router_str_v1821a(symbol).upper()
+    if not symbol:
+        return None
+    if not _vortex_router_is_paper_v1821a(self, "spot"):
+        return None
+    return self.paper_spot.check_stops(symbol, _vortex_router_float_v1821a(current_price))
+
+
+def _vortex_manual_open_futures_v1821a(
+    self,
+    symbol="BTCUSDT",
+    side="LONG",
+    price=0.0,
+    atr=0.0,
+    margin_usdt=20.0,
+    leverage=3.0,
+    tp0_mult=0.6,
+    tp_mult=2.0,
+    sl_mult=1.5,
+    setup_type="manual_fut",
+    args_text="manual futures open",
+    **kwargs,
+):
+    if not _vortex_router_is_paper_v1821a(self, "fut"):
+        return _vortex_router_error_v1821a("manual futures open is PAPER-only in this snapshot")
+
+    symbol = _vortex_router_str_v1821a(symbol, "BTCUSDT").upper()
+    side_u = _vortex_router_str_v1821a(side, "LONG").upper()
+    price = _vortex_router_float_v1821a(price)
+    atr = _vortex_router_float_v1821a(atr)
+    margin_usdt = _vortex_router_float_v1821a(margin_usdt)
+    leverage = _vortex_router_float_v1821a(leverage, 1.0)
+
+    if price <= 0 or atr <= 0 or margin_usdt <= 0 or leverage <= 0:
+        return _vortex_router_error_v1821a("invalid manual futures params")
+    if side_u not in {"LONG", "SHORT", "BUY", "SELL"}:
+        return _vortex_router_error_v1821a("unsupported futures side")
+
+    side_norm = "LONG" if side_u in {"LONG", "BUY"} else "SHORT"
+    qty = (margin_usdt * leverage) / price
+
+    if side_norm == "LONG":
+        tp0 = price + atr * _vortex_router_float_v1821a(tp0_mult, 0.6)
+        tp = price + atr * _vortex_router_float_v1821a(tp_mult, 2.0)
+        tp2 = price + atr * max(_vortex_router_float_v1821a(tp_mult, 2.0), 3.5)
+        sl = price - atr * _vortex_router_float_v1821a(sl_mult, 1.5)
+    else:
+        tp0 = price - atr * _vortex_router_float_v1821a(tp0_mult, 0.6)
+        tp = price - atr * _vortex_router_float_v1821a(tp_mult, 2.0)
+        tp2 = price - atr * max(_vortex_router_float_v1821a(tp_mult, 2.0), 3.5)
+        sl = price + atr * _vortex_router_float_v1821a(sl_mult, 1.5)
+
+    return self.paper_futures.open_position(
+        symbol=symbol,
+        side=side_norm,
+        qty=qty,
+        price=price,
+        tp=tp,
+        sl=sl,
+        atr=atr,
+        leverage=leverage,
+        setup_type=_vortex_router_str_v1821a(setup_type, "manual_fut"),
+        args_text=_vortex_router_str_v1821a(args_text, "manual futures open"),
+        tp0=tp0,
+        tp2=tp2,
+    )
+
+
+def _vortex_manual_open_spot_v1821a(
+    self,
+    symbol="BTCUSDT",
+    price=0.0,
+    atr=0.0,
+    order_usdt=20.0,
+    tp_mult=3.0,
+    setup_type="manual_spot",
+    args_text="manual spot open",
+    **kwargs,
+):
+    if not _vortex_router_is_paper_v1821a(self, "spot"):
+        return _vortex_router_error_v1821a("manual spot open is PAPER-only in this snapshot")
+
+    symbol = _vortex_router_str_v1821a(symbol, "BTCUSDT").upper()
+    price = _vortex_router_float_v1821a(price)
+    atr = _vortex_router_float_v1821a(atr)
+    order_usdt = _vortex_router_float_v1821a(order_usdt)
+    if price <= 0 or atr <= 0 or order_usdt <= 0:
+        return _vortex_router_error_v1821a("invalid manual spot params")
+
+    qty = order_usdt / price
+    tp = price + atr * _vortex_router_float_v1821a(tp_mult, 3.0)
+    return self.paper_spot.open_position(
+        symbol=symbol,
+        qty=qty,
+        price=price,
+        tp=tp,
+        atr=atr,
+        setup_type=_vortex_router_str_v1821a(setup_type, "manual_spot"),
+        args_text=_vortex_router_str_v1821a(args_text, "manual spot open"),
+    )
+
+
+def _vortex_manual_close_all_spot_v1821a(self, prices=None, reason="MANUAL", **kwargs):
+    if not _vortex_router_is_paper_v1821a(self, "spot"):
+        return [_vortex_router_error_v1821a("manual spot close-all is PAPER-only in this snapshot")]
+
+    prices = prices if isinstance(prices, dict) else {}
+    result = []
+    positions = self.get_all_spot_positions() if hasattr(self, "get_all_spot_positions") else {}
+    for symbol, pos in list((positions or {}).items()):
+        sym = _vortex_router_str_v1821a(symbol or _vortex_router_pos_get_v1821a(pos, "symbol", default="")).upper()
+        price = prices.get(sym) or prices.get(sym.lower())
+        if price is None:
+            price = (
+                _vortex_router_pos_get_v1821a(pos, "mark_price")
+                or _vortex_router_pos_get_v1821a(pos, "current_price")
+                or _vortex_router_pos_get_v1821a(pos, "avg_price")
+                or _vortex_router_pos_get_v1821a(pos, "entry")
+                or 0.0
+            )
+        result.append(self.close_spot_position(symbol=sym, current_price=_vortex_router_float_v1821a(price), reason=reason))
+    return result
+
+
+def _vortex_update_futures_sl_v1821a(self, new_sl, reason="GUIDE_SL", **kwargs):
+    if not _vortex_router_is_paper_v1821a(self, "fut"):
+        return _vortex_router_error_v1821a("futures SL update is PAPER-only in this snapshot")
+    if hasattr(self.paper_futures, "update_sl"):
+        return self.paper_futures.update_sl(_vortex_router_float_v1821a(new_sl), reason=_vortex_router_str_v1821a(reason, "GUIDE_SL"))
+    return None
+
+
+try:
+    ExecutionRouter.close_futures_position = _vortex_close_futures_position_v1821a
+    ExecutionRouter.close_spot_position = _vortex_close_spot_position_v1821a
+    ExecutionRouter.check_futures_position = _vortex_check_futures_position_v1821a
+    ExecutionRouter.check_spot_position = _vortex_check_spot_position_v1821a
+    ExecutionRouter.manual_open_futures = _vortex_manual_open_futures_v1821a
+    ExecutionRouter.manual_open_spot = _vortex_manual_open_spot_v1821a
+    ExecutionRouter.manual_close_all_spot = _vortex_manual_close_all_spot_v1821a
+    ExecutionRouter.update_futures_sl = _vortex_update_futures_sl_v1821a
+except Exception:
+    pass
+# --- END VORTEX v1.8.21a ROUTER API CONTRACTS ---
