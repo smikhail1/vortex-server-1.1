@@ -147,6 +147,15 @@ class RiskConfig:
     momentum_long_max_change_pct: float = 14.0
     momentum_long_max_range_pct: float = 16.0
 
+
+    # VORTEX v1.8.19l-1: real weak-progress close guard for FUT positions.
+    # Conservative first live rule promoted from shadow analytics.
+    position_weak_progress_enabled: bool = True
+    position_weak_progress_min_hold_sec: int = 900
+    position_weak_progress_max_mfe_net: float = 0.03
+    position_weak_progress_max_current_pnl_net: float = 0.01
+    position_weak_progress_close_reason: str = "WEAK_PROGRESS"
+
 @dataclass(frozen=True)
 class PositionStateConfig:
     enabled: bool = True

@@ -233,6 +233,39 @@ class TradeManager:
         except Exception as e:
             self._log_error("TRADE_MANAGER", f"position management shadow record failed: {e}")
 
+        # VORTEX v1.8.19l-1: real weak-progress close guard.
+        # Promotes the proven shadow signal `weak_progress_timeout_no_tp0` into
+        # a conservative PAPER close before normal guide/check handling.
+        try:
+            from position_management_live_guard import evaluate_real_weak_progress
+            live_dec = evaluate_real_weak_progress(pos, current_price=price)
+            if safe_str(live_dec.get("action")).upper() == "CLOSE":
+                reason = safe_str(live_dec.get("reason")) or "WEAK_PROGRESS"
+                self._log_info("LIVE POSITION GUARD", reason, {
+                    "symbol": symbol,
+                    "price": price,
+                    "hold_sec": live_dec.get("hold_sec"),
+                    "pnl_net": live_dec.get("pnl_net"),
+                    "max_pnl_net": live_dec.get("max_pnl_net"),
+                    "setup_type": live_dec.get("setup_type"),
+                    "shadow_reason": live_dec.get("shadow_reason"),
+                    "thresholds": live_dec.get("thresholds"),
+                })
+                lock = open_close_lock
+                try:
+                    if lock:
+                        async with lock:
+                            res = router.close_futures_position(price, reason=reason)
+                            await self._handle_futures_result(state, res, symbol, price, pos, trade_logger, risk_manager)
+                    else:
+                        res = router.close_futures_position(price, reason=reason)
+                        await self._handle_futures_result(state, res, symbol, price, pos, trade_logger, risk_manager)
+                except Exception as e:
+                    self._log_error("TRADE_MANAGER", f"weak_progress close failed: {e}", {"trace": traceback.format_exc()})
+                return
+        except Exception as e:
+            self._log_error("TRADE_MANAGER", f"weak_progress live guard failed: {e}", {"trace": traceback.format_exc()})
+
         try: self._safe_position_update_obj(router.get_futures_position(), "FUT", current_price=price)
         except Exception as e: self._log_error("TRADE_MANAGER", f"update_obj failed: {e}")
 
