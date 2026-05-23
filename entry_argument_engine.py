@@ -42,7 +42,7 @@ except Exception:  # pragma: no cover - defensive fallback
 
 
 SCHEMA = "vortex.entry_argument_decision.v1"
-SCHEMA_VERSION = "1.8.20a"
+SCHEMA_VERSION = "1.8.20b"
 DEFAULT_PATH = Path("_runtime/entry_argument_decisions.jsonl")
 
 
@@ -212,8 +212,30 @@ def evaluate_entry_argument(
     elif vol_ratio < 0.8:
         confidence -= 8; _append_unique(args_against, f"weak volume {vol_ratio:.2f}x")
 
+    # Directional consistency:
+    # Same-direction move supports continuation.
+    # Opposite-direction move is not a bullish/bearish argument by itself.
+    directional_aligned = False
+    directional_against = False
+
     if abs(change_pct) >= 3.0:
-        confidence += 7; _append_unique(args_for, f"directional move {change_pct:.2f}%")
+        if (side_u == "LONG" and change_pct > 0) or (side_u == "SHORT" and change_pct < 0):
+            directional_aligned = True
+            confidence += 7
+            _append_unique(args_for, f"directional move aligned {change_pct:.2f}%")
+        elif (side_u == "LONG" and change_pct < 0) or (side_u == "SHORT" and change_pct > 0):
+            directional_against = True
+            confidence -= 10
+            _append_unique(args_against, f"directional move against {side_u} {change_pct:.2f}%")
+
+            trend_aligned_for_pullback = (
+                (side_u == "LONG" and trend_4h in {"up", "strong_up", "bull", "bullish"})
+                or (side_u == "SHORT" and trend_4h in {"down", "strong_down", "bear", "bearish"})
+            )
+            if trend_aligned_for_pullback:
+                tags.append("pullback_candidate")
+                _append_unique(args_against, "pullback candidate requires structure confirmation")
+
     if range_pct >= 7.0:
         confidence += 5; _append_unique(args_for, f"range expansion {range_pct:.2f}%")
 
@@ -290,6 +312,21 @@ def evaluate_entry_argument(
     else:
         grade = "A"
         decision = "STRONG_ALLOW_SHADOW"
+
+    # Safety caps for shadow grading.
+    # Do not label an entry as A without explicit structure confirmation.
+    if grade == "A" and not structure_confirmed:
+        grade = "B"
+        decision = "ALLOW_SHADOW"
+        _append_unique(args_against, "grade capped: no explicit structure confirmation")
+        tags.append("grade_cap_no_structure")
+
+    # Momentum without explicit structure should remain observational until analytics proves otherwise.
+    if setup.startswith("momentum") and not structure_confirmed and grade in {"A", "B"}:
+        grade = "C"
+        decision = "SHADOW_ONLY"
+        _append_unique(args_against, "grade capped: momentum without structure")
+        tags.append("grade_cap_momentum_no_structure")
 
     if grade in {"A", "B"}:
         entry_quality = "tradable"
