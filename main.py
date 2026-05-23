@@ -621,6 +621,50 @@ async def strategy_loop(
                         setup_type=analysis.get("setup_type"),
                     )
 
+                    # VORTEX v1.8.20a: shadow-only Entry Argument Engine.
+                    # It builds a proof chain for the confirmed entry without blocking execution yet.
+                    try:
+                        from entry_argument_engine import evaluate_and_record_entry_argument
+
+                        entry_argument = evaluate_and_record_entry_argument(
+                            symbol=sym,
+                            side=side,
+                            setup_type=safe_str(analysis.get("setup_type")),
+                            analysis=analysis,
+                            current=current,
+                            ladder=ladder,
+                            macro_filter=macro_filter,
+                            watch=item,
+                        )
+
+                        analysis["entry_argument"] = entry_argument
+
+                        entry_summary = safe_str(entry_argument.get("summary"), "")
+                        if entry_summary:
+                            base_args = safe_str(analysis.get("args_text"), "")
+                            if entry_summary not in base_args:
+                                analysis["args_text"] = (base_args + " | " + entry_summary).strip(" |")
+
+                        if logger:
+                            logger.info("ENTRY_ARGUMENT", "futures entry argument shadow", {
+                                "symbol": sym,
+                                "side": side,
+                                "setup_type": safe_str(analysis.get("setup_type")),
+                                "entry_grade": entry_argument.get("entry_grade"),
+                                "confidence": entry_argument.get("confidence"),
+                                "decision": entry_argument.get("decision"),
+                                "arguments_for": entry_argument.get("arguments_for", [])[:6],
+                                "arguments_against": entry_argument.get("arguments_against", [])[:6],
+                            })
+                    except Exception as exc:
+                        if logger:
+                            logger.warning("ENTRY_ARGUMENT", "entry argument shadow failed open", {
+                                "symbol": sym,
+                                "side": side,
+                                "setup_type": safe_str(analysis.get("setup_type")),
+                                "error": str(exc),
+                            })
+
                     qty = CONFIG.trading.futures_margin_usdt / price
 
                     result = {"code": "LOCKED_NOT_RUN"}
