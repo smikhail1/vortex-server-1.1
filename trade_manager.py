@@ -194,6 +194,23 @@ class TradeManager:
             except Exception:
                 pass
             self._safe_log_trade(trade_logger, data, fallback_pos, "FUT")
+
+            # VORTEX v1.8.21c: audit futures close result.
+            # Read-only telemetry: does not change state, does not edit trades.csv.
+            try:
+                from close_result_auditor import record_close_result
+                record_close_result(
+                    data=data,
+                    fallback_pos=fallback_pos,
+                    market="FUT",
+                    source="trade_manager._handle_futures_result",
+                    result=result,
+                    trade_logger_attempted=bool(trade_logger),
+                    risk_register_attempted=bool(risk_manager),
+                )
+            except Exception as e:
+                self._log_error("TRADE_MANAGER", f"close audit failed: {e}")
+
             self._safe_register_close(risk_manager, symbol, "fut", pnl_n, reason)
 
             # VORTEX v1.8.19j-r2: remember close reason for post-close cooldown / anti-reentry.
@@ -334,6 +351,23 @@ class TradeManager:
                         except Exception:
                             pass
                         self._safe_log_trade(trade_logger, data, pos, "SPOT")
+
+                        # VORTEX v1.8.21c: audit spot close result.
+                        # Read-only telemetry: does not change state, does not edit trades.csv.
+                        try:
+                            from close_result_auditor import record_close_result
+                            record_close_result(
+                                data=data,
+                                fallback_pos=pos,
+                                market="SPOT",
+                                source="trade_manager.process_spot",
+                                result=res,
+                                trade_logger_attempted=bool(trade_logger),
+                                risk_register_attempted=bool(risk_manager),
+                            )
+                        except Exception as e:
+                            self._log_error("TRADE_MANAGER", f"spot close audit failed: {e}")
+
                         self._safe_register_close(risk_manager, symbol, "spot", pnl_n, reason)
                         self._safe_position_event("CLOSED", {"symbol": symbol, "market": "SPOT", "reason": reason, "price": px, "pnl_net": pnl_n, "data": data})
             except Exception as e:
