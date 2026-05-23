@@ -156,6 +156,15 @@ class RiskConfig:
     position_weak_progress_max_current_pnl_net: float = 0.01
     position_weak_progress_close_reason: str = "WEAK_PROGRESS"
 
+    # VORTEX v1.8.19l-r3: stale weak-progress guard.
+    # Closes old FUT positions without TP0 when they stall just above the first MFE threshold,
+    # especially weak EA:D/BLOCK_SHADOW entries.
+    position_stale_weak_progress_enabled: bool = True
+    position_stale_weak_progress_min_hold_sec: int = 1800
+    position_stale_weak_progress_max_mfe_net: float = 0.05
+    position_stale_weak_progress_max_current_pnl_net: float = 0.01
+    position_stale_weak_progress_close_reason: str = "WEAK_PROGRESS_STALE"
+
 @dataclass(frozen=True)
 class PositionStateConfig:
     enabled: bool = True

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 SCHEMA = "vortex.position_management_live_guard.v1"
-SCHEMA_VERSION = "1.8.19l-1"
+SCHEMA_VERSION = "1.8.19l-r3"
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -78,6 +78,12 @@ def evaluate_real_weak_progress(position: Dict[str, Any], current_price: float =
     max_current_pnl_net = float(_risk_value("position_weak_progress_max_current_pnl_net", 0.01))
     close_reason = str(_risk_value("position_weak_progress_close_reason", "WEAK_PROGRESS"))
 
+    stale_enabled = bool(_risk_value("position_stale_weak_progress_enabled", True))
+    stale_min_hold_sec = int(_risk_value("position_stale_weak_progress_min_hold_sec", 1800))
+    stale_max_mfe_net = float(_risk_value("position_stale_weak_progress_max_mfe_net", 0.05))
+    stale_max_current_pnl_net = float(_risk_value("position_stale_weak_progress_max_current_pnl_net", 0.01))
+    stale_close_reason = str(_risk_value("position_stale_weak_progress_close_reason", "WEAK_PROGRESS_STALE"))
+
     symbol = str(position.get("symbol") or "").upper()
     side = str(position.get("side") or "").upper()
     setup_type = str(position.get("setup_type") or "UNKNOWN")
@@ -93,6 +99,8 @@ def evaluate_real_weak_progress(position: Dict[str, Any], current_price: float =
     max_pnl_net = _safe_float(_first_non_empty(position, fallback, "max_pnl_net", 0.0))
     tp0_hit = _safe_bool(_first_non_empty(position, fallback, "tp0_hit", False))
     tp1_hit = _safe_bool(_first_non_empty(position, fallback, "tp1_hit", False))
+    args_text = str(_first_non_empty(position, fallback, "args_text", "") or "")
+    ea_block_shadow = ("EA:D/" in args_text) or ("BLOCK_SHADOW" in args_text)
     entry = _safe_float(_first_non_empty(position, fallback, "entry", 0.0))
     mark_price = _safe_float(position.get("mark_price") or current_price or fallback.get("current_price") or fallback.get("mark_price"), 0.0)
 
@@ -104,8 +112,17 @@ def evaluate_real_weak_progress(position: Dict[str, Any], current_price: float =
         and pnl_net <= max_current_pnl_net
     )
 
-    action = "CLOSE" if allow_close else "HOLD"
-    reason = close_reason if allow_close else "no_live_management_action"
+    allow_stale_close = (
+        stale_enabled
+        and hold_sec >= stale_min_hold_sec
+        and not tp0_hit
+        and pnl_net <= stale_max_current_pnl_net
+        and (max_pnl_net <= stale_max_mfe_net or ea_block_shadow)
+    )
+
+    final_close_reason = close_reason if allow_close else (stale_close_reason if allow_stale_close else "no_live_management_action")
+    action = "CLOSE" if (allow_close or allow_stale_close) else "HOLD"
+    reason = final_close_reason
 
     return {
         "schema": SCHEMA,
@@ -116,8 +133,8 @@ def evaluate_real_weak_progress(position: Dict[str, Any], current_price: float =
         "setup_type": setup_type,
         "action": action,
         "reason": reason,
-        "shadow_reason": "weak_progress_timeout_no_tp0" if allow_close else "",
-        "confidence": 70 if allow_close else 0,
+        "shadow_reason": ("weak_progress_timeout_no_tp0" if allow_close else ("stale_weak_progress_no_tp0" if allow_stale_close else "")),
+        "confidence": 70 if allow_close else (62 if allow_stale_close else 0),
         "enabled": enabled,
         "current_price": mark_price,
         "entry": entry,
@@ -130,10 +147,14 @@ def evaluate_real_weak_progress(position: Dict[str, Any], current_price: float =
         "runtime_state_fallback_used": bool(fallback),
         "tp0_hit": tp0_hit,
         "tp1_hit": tp1_hit,
+        "ea_block_shadow": ea_block_shadow,
         "thresholds": {
             "min_hold_sec": min_hold_sec,
             "max_mfe_net": max_mfe_net,
             "max_current_pnl_net": max_current_pnl_net,
+            "stale_min_hold_sec": stale_min_hold_sec,
+            "stale_max_mfe_net": stale_max_mfe_net,
+            "stale_max_current_pnl_net": stale_max_current_pnl_net,
         },
-        "tags": ["weak_progress", "no_tp0", "real_close_guard"] if allow_close else [],
+        "tags": (["weak_progress", "no_tp0", "real_close_guard"] if allow_close else (["stale_weak_progress", "no_tp0", "real_close_guard"] if allow_stale_close else [])),
     }
