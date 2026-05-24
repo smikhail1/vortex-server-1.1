@@ -452,3 +452,62 @@ try:
 except Exception:
     pass
 # --- END VORTEX v1.8.21a ROUTER API CONTRACTS ---
+
+
+# --- VORTEX v1.8.21f-a HARD FUT PRE-OPEN STATE GUARD ---
+def _vortex_open_futures_position_v1821fa(self, *args, **kwargs):
+    """
+    Hard safety guard:
+    If persistent trades_state.json still contains FUT open positions while runtime
+    is empty, block a new FUT open instead of overwriting/losing state.
+    """
+    if not _vortex_router_is_paper_v1821a(self, "fut"):
+        return _vortex_router_error_v1821a("futures open is PAPER-only in this snapshot")
+
+    try:
+        runtime_pos = None
+        if hasattr(self, "paper_futures") and hasattr(self.paper_futures, "get_position"):
+            runtime_pos = self.paper_futures.get_position()
+
+        # If runtime already has a position, let PaperFutures return its normal rejection.
+        if runtime_pos is None:
+            try:
+                from persistent_state_guard import evaluate_futures_pre_open_guard
+
+                guard = evaluate_futures_pre_open_guard(
+                    symbol=kwargs.get("symbol"),
+                    side=kwargs.get("side"),
+                    router=self,
+                    state_path="trades_state.json",
+                    fail_closed=True,
+                )
+            except Exception as exc:
+                guard = {
+                    "allow": False,
+                    "code": "STATE_GUARD_EXCEPTION",
+                    "reason": f"state_guard_exception:{exc}",
+                }
+
+            if not guard.get("allow", False):
+                return {
+                    "code": "BLOCK_OPEN_STATE_MISMATCH",
+                    "msg": guard.get("reason", "persistent state guard blocked futures open"),
+                    "guard": guard,
+                }
+
+    except Exception as exc:
+        return {
+            "code": "BLOCK_OPEN_STATE_MISMATCH",
+            "msg": f"persistent state guard fatal:{exc}",
+            "guard": {"allow": False, "reason": str(exc)},
+        }
+
+    return self.paper_futures.open_position(*args, **kwargs)
+
+
+try:
+    ExecutionRouter.open_futures_position = _vortex_open_futures_position_v1821fa
+except Exception:
+    pass
+# --- END VORTEX v1.8.21f-a HARD FUT PRE-OPEN STATE GUARD ---
+
