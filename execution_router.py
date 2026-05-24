@@ -511,3 +511,49 @@ except Exception:
     pass
 # --- END VORTEX v1.8.21f-a HARD FUT PRE-OPEN STATE GUARD ---
 
+
+# --- VORTEX v1.8.21h-a ENTRY SAFETY POLICY ---
+_vortex_prev_open_futures_position_v1821h = ExecutionRouter.open_futures_position
+
+def _vortex_open_futures_position_v1821h(self, *args, **kwargs):
+    """
+    Final pre-open safety gate before FUT open.
+    Blocks weak EA grades, disabled setups, blacklisted symbols, repeat symbol trades,
+    and excessive daily FUT activity.
+    """
+    try:
+        from entry_safety_policy import evaluate_entry_safety
+
+        policy = evaluate_entry_safety(
+            args=args,
+            kwargs=kwargs,
+            trades_path="trades.csv",
+        )
+
+        if not policy.get("allow", False):
+            return {
+                "code": "BLOCK_ENTRY_SAFETY_POLICY",
+                "msg": policy.get("reason", "entry safety policy blocked futures open"),
+                "policy": policy,
+            }
+
+    except Exception as exc:
+        return {
+            "code": "BLOCK_ENTRY_SAFETY_POLICY",
+            "msg": f"entry safety policy fatal:{exc}",
+            "policy": {
+                "allow": False,
+                "code": "ENTRY_SAFETY_EXCEPTION",
+                "reason": str(exc),
+            },
+        }
+
+    return _vortex_prev_open_futures_position_v1821h(self, *args, **kwargs)
+
+
+try:
+    ExecutionRouter.open_futures_position = _vortex_open_futures_position_v1821h
+except Exception:
+    pass
+# --- END VORTEX v1.8.21h-a ENTRY SAFETY POLICY ---
+
