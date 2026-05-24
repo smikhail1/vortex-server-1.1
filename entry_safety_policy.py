@@ -12,6 +12,7 @@ SCHEMA_VERSION = "1.8.21h-a"
 
 MIN_EA_SCORE = 70
 MAX_FUT_OPENS_PER_DAY = 8
+ENABLE_DAILY_FUT_OPEN_LIMIT = False  # PAPER/statistics mode: collect filtered-entry sample
 SYMBOL_COOLDOWN_AFTER_BAD_CLOSE_SEC = 4 * 3600
 
 ALLOWED_EA_GRADES = {"B"}
@@ -212,6 +213,7 @@ def evaluate_entry_safety(
         "blacklist_symbols": sorted(BLACKLIST_SYMBOLS),
         "min_ea_score": MIN_EA_SCORE,
         "max_fut_opens_per_day": MAX_FUT_OPENS_PER_DAY,
+        "enable_daily_fut_open_limit": ENABLE_DAILY_FUT_OPEN_LIMIT,
     }
 
     if not symbol:
@@ -235,7 +237,7 @@ def evaluate_entry_safety(
     if _setup_disabled(setup_type):
         return _decision(False, "BLOCK_SETUP_DISABLED", f"setup_type {setup_type} is disabled for live futures", checks)
 
-    if len(today_opens) >= MAX_FUT_OPENS_PER_DAY:
+    if ENABLE_DAILY_FUT_OPEN_LIMIT and len(today_opens) >= MAX_FUT_OPENS_PER_DAY:
         return _decision(False, "BLOCK_DAILY_FUT_OPEN_LIMIT", f"today FUT opens {len(today_opens)} >= {MAX_FUT_OPENS_PER_DAY}", checks)
 
     if today_symbol_opens:
