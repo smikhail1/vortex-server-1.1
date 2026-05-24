@@ -557,3 +557,74 @@ except Exception:
     pass
 # --- END VORTEX v1.8.21h-a ENTRY SAFETY POLICY ---
 
+
+# --- VORTEX v1.8.21h-b ENTRY CANDIDATE JOURNAL ---
+_vortex_prev_open_futures_position_v1821hb = ExecutionRouter.open_futures_position
+
+def _vortex_open_futures_position_v1821hb(self, *args, **kwargs):
+    """
+    Observability wrapper:
+    logs every FUT open attempt with EA/setup/policy/result into
+    _runtime/entry_candidates.jsonl.
+    """
+    policy = None
+
+    try:
+        from entry_safety_policy import evaluate_entry_safety
+        policy = evaluate_entry_safety(
+            args=args,
+            kwargs=kwargs,
+            trades_path="trades.csv",
+        )
+    except Exception as exc:
+        policy = {
+            "allow": False,
+            "code": "ENTRY_SAFETY_EXCEPTION",
+            "reason": str(exc),
+        }
+
+    if not policy.get("allow", False):
+        result = {
+            "code": "BLOCK_ENTRY_SAFETY_POLICY",
+            "msg": policy.get("reason", "entry safety policy blocked futures open"),
+            "policy": policy,
+        }
+        try:
+            from entry_candidate_journal import log_entry_candidate
+            log_entry_candidate(
+                args=args,
+                kwargs=kwargs,
+                policy=policy,
+                result=result,
+                final_action="BLOCKED",
+            )
+        except Exception:
+            pass
+        return result
+
+    result = _vortex_prev_open_futures_position_v1821hb(self, *args, **kwargs)
+
+    try:
+        from entry_candidate_journal import log_entry_candidate
+        final_action = "OPEN_ATTEMPT"
+        if isinstance(result, dict) and str(result.get("code")) != "00000":
+            final_action = "OPEN_REJECTED_BY_ROUTER"
+        log_entry_candidate(
+            args=args,
+            kwargs=kwargs,
+            policy=policy,
+            result=result if isinstance(result, dict) else {"code": "UNKNOWN", "msg": str(result)},
+            final_action=final_action,
+        )
+    except Exception:
+        pass
+
+    return result
+
+
+try:
+    ExecutionRouter.open_futures_position = _vortex_open_futures_position_v1821hb
+except Exception:
+    pass
+# --- END VORTEX v1.8.21h-b ENTRY CANDIDATE JOURNAL ---
+
