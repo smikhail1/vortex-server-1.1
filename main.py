@@ -20,6 +20,7 @@ from position_state_engine import PositionStateEngine
 from spot_planner import SpotPlannerEngine
 from state_manager import StateManager
 from strategy import SwingStrategy, apply_exchange_intel_filters_to_analysis
+from strategy_observer import strategy_observer_loop
 from ta_service import TAService
 from trade_manager import TradeManager
 from watch_engine import WatchEngine
@@ -1175,6 +1176,16 @@ async def main() -> None:
         create_task(oracle.loop(), name="oracle"),
         create_task(candle_service.loop(), name="candles"),
         create_task(ta_service.loop(), name="ta"),
+        # --- VORTEX v1.8.21i-a STRATEGY OBSERVER TASK ---
+        create_task(
+            strategy_observer_loop(
+                state=state,
+                strategy=strategy,
+                logger=logger,
+            ),
+            name="strategy_observer",
+        ),
+        # --- END VORTEX v1.8.21i-a STRATEGY OBSERVER TASK ---
         create_task(system_metrics_loop(state, logger=logger), name="system_metrics"),
         create_task(monitor_loop(state, logger=logger), name="monitor"),
         create_task(sync_router_loop(state, router, logger=logger), name="router_sync"),
