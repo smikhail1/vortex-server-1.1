@@ -10,6 +10,7 @@ from trade_snapshot_recorder import TradeSnapshotRecorder
 from execution_router import ExecutionRouter
 from logger import Logger
 from market_heatmap import market_heatmap_loop
+from setup_zone import setup_zone_loop
 from loop_runner import create_task
 from market_data import MarketDataStream
 from market_oracle import MarketOracle
@@ -1186,6 +1187,15 @@ async def main() -> None:
             name="market_heatmap",
         ),
         # --- END VORTEX v1.8.21k-a MARKET HEATMAP TASK ---
+        # --- VORTEX v1.8.21k-b SETUP ZONE TASK ---
+        create_task(
+            setup_zone_loop(
+                state=state,
+                logger=logger,
+            ),
+            name="setup_zone",
+        ),
+        # --- END VORTEX v1.8.21k-b SETUP ZONE TASK ---
         # --- VORTEX v1.8.21i-a STRATEGY OBSERVER TASK ---
         create_task(
             strategy_observer_loop(
