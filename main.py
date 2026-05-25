@@ -9,6 +9,7 @@ from defensive_gates import DefensiveGates
 from trade_snapshot_recorder import TradeSnapshotRecorder
 from execution_router import ExecutionRouter
 from logger import Logger
+from market_heatmap import market_heatmap_loop
 from loop_runner import create_task
 from market_data import MarketDataStream
 from market_oracle import MarketOracle
@@ -1176,6 +1177,15 @@ async def main() -> None:
         create_task(oracle.loop(), name="oracle"),
         create_task(candle_service.loop(), name="candles"),
         create_task(ta_service.loop(), name="ta"),
+        # --- VORTEX v1.8.21k-a MARKET HEATMAP TASK ---
+        create_task(
+            market_heatmap_loop(
+                state=state,
+                logger=logger,
+            ),
+            name="market_heatmap",
+        ),
+        # --- END VORTEX v1.8.21k-a MARKET HEATMAP TASK ---
         # --- VORTEX v1.8.21i-a STRATEGY OBSERVER TASK ---
         create_task(
             strategy_observer_loop(
