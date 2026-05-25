@@ -11,6 +11,7 @@ from execution_router import ExecutionRouter
 from logger import Logger
 from market_heatmap import market_heatmap_loop
 from setup_zone import setup_zone_loop
+from context_fusion import context_fusion_loop
 from loop_runner import create_task
 from market_data import MarketDataStream
 from market_oracle import MarketOracle
@@ -1196,6 +1197,15 @@ async def main() -> None:
             name="setup_zone",
         ),
         # --- END VORTEX v1.8.21k-b SETUP ZONE TASK ---
+        # --- VORTEX v1.8.21k-c CONTEXT FUSION TASK ---
+        create_task(
+            context_fusion_loop(
+                state=state,
+                logger=logger,
+            ),
+            name="context_fusion",
+        ),
+        # --- END VORTEX v1.8.21k-c CONTEXT FUSION TASK ---
         # --- VORTEX v1.8.21i-a STRATEGY OBSERVER TASK ---
         create_task(
             strategy_observer_loop(
