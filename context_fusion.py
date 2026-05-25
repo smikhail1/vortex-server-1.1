@@ -3,6 +3,7 @@ import json
 import time
 from pathlib import Path
 from typing import Any, Dict, List
+from snapshot_guard import should_write_latest_snapshot
 
 
 SCHEMA = "vortex.context_fusion.v1"
@@ -389,7 +390,20 @@ async def context_fusion_loop(state, logger=None) -> None:
         try:
             snapshot = build_latest_snapshot_from_files()
 
-            write_json_atomic(LATEST_PATH, snapshot)
+            guard = should_write_latest_snapshot(LATEST_PATH, snapshot)
+            snapshot["latest_guard"] = guard
+
+            if guard.get("write_latest"):
+                write_json_atomic(LATEST_PATH, snapshot)
+            else:
+                try:
+                    await state.add_sys_log(
+                        "🛡️ [SNAPSHOT_GUARD]",
+                        f"{guard.get('action')} | {guard.get('reason')} | new={guard.get('new_counts')} | old={guard.get('old_counts')}",
+                    )
+                except Exception:
+                    pass
+
             append_summary(SUMMARY_PATH, snapshot)
 
             summary = snapshot.get("summary", {})

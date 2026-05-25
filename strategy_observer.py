@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from config import CONFIG
 from entry_safety_policy import evaluate_entry_safety
+from snapshot_guard import should_write_latest_snapshot
 
 SCHEMA = "vortex.strategy_observer.v1"
 SCHEMA_VERSION = "1.8.21i-a-r2"
@@ -192,7 +193,20 @@ async def strategy_observer_loop(state, strategy, logger=None) -> None:
             macro = system.get("macro", {}) or {}
             macro_filter = _safe_str(macro.get("global_filter") or macro.get("filter") or "allow_all", "allow_all")
             snapshot = build_strategy_observer_snapshot(dashboard=dashboard, strategy=strategy, macro_filter=macro_filter, trades_path="trades.csv")
-            write_json_atomic(LATEST_PATH, snapshot)
+            guard = should_write_latest_snapshot(LATEST_PATH, snapshot)
+            snapshot["latest_guard"] = guard
+
+            if guard.get("write_latest"):
+                write_json_atomic(LATEST_PATH, snapshot)
+            else:
+                try:
+                    await state.add_sys_log(
+                        "🛡️ [SNAPSHOT_GUARD]",
+                        f"{guard.get('action')} | {guard.get('reason')} | new={guard.get('new_counts')} | old={guard.get('old_counts')}",
+                    )
+                except Exception:
+                    pass
+
             append_summary(SUMMARY_PATH, snapshot)
             try:
                 await state.add_sys_log("🧠 [STRATEGY_OBSERVER]", f"analyzed={snapshot['summary']['analyzed_count']} | no_ta={snapshot['summary']['no_ta_count']} | states={snapshot['summary']['state_counts']} | allowed={snapshot['summary']['ready_allowed_count']} | raw_no_ea={snapshot['summary']['raw_ready_no_ea_count']}")
