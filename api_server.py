@@ -54,6 +54,7 @@ class APIServer:
             self.app.router.add_get("/api/history", self.handle_history),
             self.app.router.add_get("/api/stats", self.handle_stats),
             self.app.router.add_get("/api/intelligence", self.handle_intelligence),
+            self.app.router.add_get("/api/context-fusion", self.handle_context_fusion),
         ]
 
         if CONFIG.trading.debug_api_enabled:
@@ -161,7 +162,71 @@ class APIServer:
             "spot_open_positions": len(spot_positions),
         }
 
+        dashboard["context_fusion"] = self._read_context_fusion_payload()
+
         return dashboard
+
+
+    def _read_context_fusion_payload(self) -> Dict[str, Any]:
+        """
+        VORTEX v1.8.21k-e:
+        Expose context_fusion runtime snapshot to Android dashboard.
+
+        Safe contract:
+        - missing file -> available=false
+        - invalid JSON -> available=false
+        - valid file -> available=true, summary/symbols included
+        - never raises into /api/dashboard
+        """
+        from pathlib import Path as _Path
+
+        path = _Path("_runtime/context_fusion_latest.json")
+
+        fallback = {
+            "available": False,
+            "schema": "vortex.context_fusion.api.v1",
+            "schema_version": "1.8.21k-e",
+            "source": str(path),
+            "summary": {},
+            "symbols": [],
+            "important": [],
+            "error": None,
+        }
+
+        try:
+            if not path.exists():
+                fallback["error"] = "missing_context_fusion_latest"
+                return fallback
+
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                fallback["error"] = "invalid_context_fusion_json_root"
+                return fallback
+
+            summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+            symbols = data.get("symbols") if isinstance(data.get("symbols"), list) else []
+            important = data.get("important") if isinstance(data.get("important"), list) else []
+
+            return {
+                "available": True,
+                "schema": "vortex.context_fusion.api.v1",
+                "schema_version": "1.8.21k-e",
+                "source": str(path),
+                "snapshot_schema": data.get("schema"),
+                "snapshot_schema_version": data.get("schema_version"),
+                "ts": data.get("ts"),
+                "summary": summary,
+                "symbols": symbols,
+                "important": important,
+                "error": None,
+            }
+
+        except Exception as exc:
+            fallback["error"] = f"read_failed: {safe_str(exc)}"
+            return fallback
+
+    async def handle_context_fusion(self, request: web.Request) -> web.Response:
+        return web.json_response(self._read_context_fusion_payload())
 
     async def handle_dashboard(self, request: web.Request) -> web.Response:
         return web.json_response(await self._build_dashboard_payload())
