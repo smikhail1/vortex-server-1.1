@@ -12,6 +12,7 @@ from logger import Logger
 from market_heatmap import market_heatmap_loop
 from setup_zone import setup_zone_loop
 from context_fusion import context_fusion_loop
+from ichimoku_context import ichimoku_context_loop
 from loop_runner import create_task
 from market_data import MarketDataStream
 from market_oracle import MarketOracle
@@ -1179,6 +1180,16 @@ async def main() -> None:
         create_task(oracle.loop(), name="oracle"),
         create_task(candle_service.loop(), name="candles"),
         create_task(ta_service.loop(), name="ta"),
+        # --- VORTEX v1.8.21l-c ICHIMOKU CONTEXT TASK ---
+        create_task(
+            ichimoku_context_loop(
+                state=state,
+                candle_service=candle_service,
+                logger=logger,
+            ),
+            name="ichimoku_context",
+        ),
+        # --- END VORTEX v1.8.21l-c ICHIMOKU CONTEXT TASK ---
         # --- VORTEX v1.8.21k-a MARKET HEATMAP TASK ---
         create_task(
             market_heatmap_loop(

@@ -13,6 +13,7 @@ STRATEGY_PATH = Path("_runtime/strategy_observer_latest.json")
 HEATMAP_PATH = Path("_runtime/market_heatmap_latest.json")
 SETUP_ZONE_PATH = Path("_runtime/setup_zone_latest.json")
 DEDUP_SUMMARY_PATH = Path("_runtime/entry_candidate_dedup_summary.json")
+ICHIMOKU_PATH = Path("_runtime/ichimoku_context_latest.json")
 
 LATEST_PATH = Path("_runtime/context_fusion_latest.json")
 SUMMARY_PATH = Path("_runtime/context_fusion_summary.jsonl")
@@ -76,6 +77,10 @@ def _heatmap_symbols(heatmap_snapshot: Dict[str, Any]) -> Dict[str, Dict[str, An
     return _index_by_symbol(heatmap_snapshot.get("symbols") or [])
 
 
+def _ichimoku_symbols(ichimoku_snapshot: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return _index_by_symbol(ichimoku_snapshot.get("symbols") or [])
+
+
 def _heatmap_support_for_side(side: str, heatmap_summary: Dict[str, Any]) -> Dict[str, Any]:
     side = _safe_str(side).upper()
     bias = _safe_str(heatmap_summary.get("bias"), "unknown")
@@ -110,6 +115,41 @@ def _heatmap_support_for_side(side: str, heatmap_summary: Dict[str, Any]) -> Dic
         "short_pressure": short_pressure,
         "support_status": status,
         "support_score": score,
+    }
+
+
+def _ichimoku_support_for_side(side: str, ichimoku: Dict[str, Any]) -> Dict[str, Any]:
+    side = _safe_str(side).upper()
+    available = bool(ichimoku.get("available"))
+
+    if not available:
+        return {
+            "available": False,
+            "trend_bias": _safe_str(ichimoku.get("trend_bias"), "no_data"),
+            "cloud_state": _safe_str(ichimoku.get("cloud_state"), "no_data"),
+            "tk_state": _safe_str(ichimoku.get("tk_state"), "no_data"),
+            "cloud_bias": _safe_str(ichimoku.get("cloud_bias"), "no_data"),
+            "support_status": "no_data",
+            "quality": 0,
+            "warnings": list(ichimoku.get("warnings") or []),
+        }
+
+    if side == "LONG":
+        support = _safe_str(ichimoku.get("long_support"), "neutral")
+    elif side == "SHORT":
+        support = _safe_str(ichimoku.get("short_support"), "neutral")
+    else:
+        support = "neutral"
+
+    return {
+        "available": True,
+        "trend_bias": _safe_str(ichimoku.get("trend_bias"), "neutral"),
+        "cloud_state": _safe_str(ichimoku.get("cloud_state"), "neutral"),
+        "tk_state": _safe_str(ichimoku.get("tk_state"), "neutral"),
+        "cloud_bias": _safe_str(ichimoku.get("cloud_bias"), "neutral"),
+        "support_status": support,
+        "quality": _safe_int(ichimoku.get("quality"), 0),
+        "warnings": list(ichimoku.get("warnings") or []),
     }
 
 
@@ -154,11 +194,13 @@ def _setup_support_for_side(side: str, setup: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _final_view(strategy: Dict[str, Any], setup_support: Dict[str, Any], heatmap_support: Dict[str, Any]) -> Dict[str, Any]:
+def _final_view(strategy: Dict[str, Any], setup_support: Dict[str, Any], heatmap_support: Dict[str, Any], ichimoku_support: Dict[str, Any] = None) -> Dict[str, Any]:
     state = _safe_str(strategy.get("state"))
     strat = strategy.get("strategy") or {}
     policy = strategy.get("policy") or {}
     side = _safe_str(strat.get("signal")).upper()
+
+    ichimoku_support = ichimoku_support or {}
 
     reasons: List[str] = []
     warnings: List[str] = []
@@ -186,6 +228,24 @@ def _final_view(strategy: Dict[str, Any], setup_support: Dict[str, Any], heatmap
         warnings.append(f"heatmap_against={heatmap_support.get('bias')}")
     else:
         warnings.append(f"heatmap_neutral={heatmap_support.get('bias')}")
+
+    if ichimoku_support.get("available"):
+        ichi_status = ichimoku_support.get("support_status")
+        ichi_bias = ichimoku_support.get("trend_bias")
+        ichi_cloud = ichimoku_support.get("cloud_state")
+        ichi_q = ichimoku_support.get("quality")
+
+        if ichi_status == "supportive":
+            reasons.append(f"ichimoku_support={ichi_bias} cloud={ichi_cloud} q={ichi_q}")
+        elif ichi_status == "against":
+            warnings.append(f"ichimoku_against={ichi_bias} cloud={ichi_cloud} q={ichi_q}")
+        elif ichi_status == "neutral":
+            warnings.append(f"ichimoku_neutral={ichi_bias} cloud={ichi_cloud} q={ichi_q}")
+
+        for w in ichimoku_support.get("warnings") or []:
+            warnings.append(f"ichimoku_warning={w}")
+    elif ichimoku_support.get("support_status") == "no_data":
+        warnings.append("ichimoku_no_data")
 
     for w in setup_support.get("warnings") or []:
         warnings.append(f"zone_warning={w}")
@@ -226,6 +286,13 @@ def _final_view(strategy: Dict[str, Any], setup_support: Dict[str, Any], heatmap
     score += _safe_int(setup_support.get("zone_quality"), 0)
     score += _safe_int(heatmap_support.get("support_score"), 50) // 2
 
+    if ichimoku_support.get("support_status") == "supportive":
+        score += min(12, _safe_int(ichimoku_support.get("quality"), 0) // 8)
+    elif ichimoku_support.get("support_status") == "against":
+        score -= 12
+    elif "inside_cloud" in (ichimoku_support.get("warnings") or []):
+        score -= 6
+
     if blockers:
         score -= 25
     if setup_support.get("support_status") == "against":
@@ -249,12 +316,17 @@ def build_context_fusion_snapshot(
     heatmap_snapshot: Dict[str, Any],
     setup_snapshot: Dict[str, Any],
     dedup_summary: Dict[str, Any] = None,
+    ichimoku_snapshot: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     dedup_summary = dedup_summary or {}
+
+    ichimoku_snapshot = ichimoku_snapshot or {}
 
     strategy_by_symbol = _strategy_symbols(strategy_snapshot)
     heatmap_by_symbol = _heatmap_symbols(heatmap_snapshot)
     setup_by_symbol = _setup_symbols(setup_snapshot)
+
+    ichimoku_by_symbol = _ichimoku_symbols(ichimoku_snapshot)
 
     heatmap_summary = heatmap_snapshot.get("summary") or {}
 
@@ -265,6 +337,7 @@ def build_context_fusion_snapshot(
         strategy = strategy_by_symbol.get(symbol) or {"symbol": symbol, "state": "NO_STRATEGY_DATA", "strategy": {}}
         setup = setup_by_symbol.get(symbol) or {"symbol": symbol}
         heat = heatmap_by_symbol.get(symbol) or {"symbol": symbol}
+        ichimoku = ichimoku_by_symbol.get(symbol) or {"symbol": symbol, "available": False}
 
         strat_info = strategy.get("strategy") or {}
         side = _safe_str(strat_info.get("signal")).upper()
@@ -272,7 +345,8 @@ def build_context_fusion_snapshot(
         # If strategy has no side but setup zone is very clear, keep symbol as WATCH.
         setup_support = _setup_support_for_side(side, setup)
         heatmap_support = _heatmap_support_for_side(side, heatmap_summary)
-        final = _final_view(strategy, setup_support, heatmap_support)
+        ichimoku_support = _ichimoku_support_for_side(side, ichimoku)
+        final = _final_view(strategy, setup_support, heatmap_support, ichimoku_support)
 
         rows.append({
             "symbol": symbol,
@@ -295,6 +369,7 @@ def build_context_fusion_snapshot(
                 "rsi_main": heat.get("rsi_main"),
                 "vol_ratio": heat.get("vol_ratio"),
             },
+            "ichimoku": ichimoku_support,
             "final": final,
         })
 
@@ -324,6 +399,7 @@ def build_context_fusion_snapshot(
         "heatmap_net_bias_score": heatmap_summary.get("net_bias_score"),
         "strategy_summary": strategy_snapshot.get("summary") or {},
         "setup_summary": setup_snapshot.get("summary") or {},
+        "ichimoku_summary": ichimoku_snapshot.get("summary") or {},
         "dedup_summary": {
             "total_seen": dedup_summary.get("total_seen"),
             "total_written": dedup_summary.get("total_written"),
@@ -380,6 +456,7 @@ def build_latest_snapshot_from_files() -> Dict[str, Any]:
         heatmap_snapshot=_load_json(HEATMAP_PATH),
         setup_snapshot=_load_json(SETUP_ZONE_PATH),
         dedup_summary=_load_json(DEDUP_SUMMARY_PATH),
+        ichimoku_snapshot=_load_json(ICHIMOKU_PATH),
     )
 
 
