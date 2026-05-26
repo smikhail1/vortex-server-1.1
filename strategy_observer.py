@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from config import CONFIG
 from entry_safety_policy import evaluate_entry_safety
+from ea_verdict_bridge import build_ea_verdict_index, find_ea_verdict, write_latest_bridge
 from snapshot_guard import should_write_latest_snapshot
 
 SCHEMA = "vortex.strategy_observer.v1"
@@ -81,7 +82,7 @@ def _classify_state(analysis: Dict[str, Any], ea: Dict[str, Any], policy: Option
         return "READY_BLOCKED_BY_POLICY"
     return "RAW_READY_UNCHECKED"
 
-def build_symbol_observation(*, symbol: str, ta: Dict[str, Any], strategy, macro_filter: str = "allow_all", trades_path: str = "trades.csv") -> Dict[str, Any]:
+def build_symbol_observation(*, symbol: str, ta: Dict[str, Any], strategy, macro_filter: str = "allow_all", trades_path: str = "trades.csv", ea_bridge: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     symbol = _safe_str(symbol).upper()
     ta = dict(ta or {})
     if not _has_real_ta(ta):
@@ -103,7 +104,16 @@ def build_symbol_observation(*, symbol: str, ta: Dict[str, Any], strategy, macro
     args_text = _safe_str(analysis.get("args_text"), "")
     ea = parse_ea(args_text)
     policy = None
-    if analysis.get("should_open"):
+    ea_bridge_verdict = None
+    if analysis.get("should_open") and not ea.get("present") and ea_bridge:
+        ea_bridge_verdict = find_ea_verdict(ea_bridge, symbol=symbol, side=_safe_str(analysis.get("signal"), "").upper(), setup_type=_safe_str(analysis.get("setup_type"), ""), max_age_sec=3600)
+        if ea_bridge_verdict:
+            bridge_ea = ea_bridge_verdict.get("ea") or {}
+            if bridge_ea.get("present"):
+                ea = {"present": True, "grade": bridge_ea.get("grade") or "", "score": _safe_int(bridge_ea.get("score"), 0), "label": bridge_ea.get("label") or "", "raw": bridge_ea.get("raw") or "", "bridge_source": ea_bridge_verdict.get("source"), "bridge_ts": ea_bridge_verdict.get("ts")}
+                bridge_policy = ea_bridge_verdict.get("policy") or {}
+                policy = {"allow": bridge_policy.get("allow"), "code": bridge_policy.get("code"), "reason": bridge_policy.get("reason")}
+    if analysis.get("should_open") and policy is None:
         policy = evaluate_entry_safety(kwargs={"symbol": symbol, "side": _safe_str(analysis.get("signal"), "").upper(), "setup_type": _safe_str(analysis.get("setup_type"), ""), "args_text": args_text}, trades_path=trades_path)
     state = _classify_state(analysis, ea, policy)
     if state == "RAW_READY_NO_EA":
@@ -124,11 +134,12 @@ def build_symbol_observation(*, symbol: str, ta: Dict[str, Any], strategy, macro
         "ta": _compact_ta(ta),
         "strategy": {"should_open": bool(analysis.get("should_open")), "signal": analysis.get("signal"), "score": _safe_int(analysis.get("score"), 0), "setup_type": analysis.get("setup_type"), "args_text": args_text, "blocked_reason": analysis.get("blocked_reason"), "threshold": _safe_int(analysis.get("threshold"), 0)},
         "ea": ea,
+        "ea_bridge": {"matched": bool(ea_bridge_verdict), "source": (ea_bridge_verdict or {}).get("source") if isinstance(ea_bridge_verdict, dict) else None, "ts": (ea_bridge_verdict or {}).get("ts") if isinstance(ea_bridge_verdict, dict) else None},
         "policy": {"allow": policy.get("allow") if isinstance(policy, dict) else None, "code": policy.get("code") if isinstance(policy, dict) else None, "reason": policy.get("reason") if isinstance(policy, dict) else None},
         "interpretation": interpretation,
     }
 
-def build_strategy_observer_snapshot(*, dashboard: Dict[str, Any], strategy, macro_filter: str = "allow_all", trades_path: str = "trades.csv") -> Dict[str, Any]:
+def build_strategy_observer_snapshot(*, dashboard: Dict[str, Any], strategy, macro_filter: str = "allow_all", trades_path: str = "trades.csv", ea_bridge: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     market = dashboard.get("market", {}) or {}
     ta_data = market.get("ta_data", {}) or {}
     prices = market.get("prices", {}) or {}
@@ -137,14 +148,15 @@ def build_strategy_observer_snapshot(*, dashboard: Dict[str, Any], strategy, mac
         ta = dict(ta_data.get(symbol, {}) or {})
         if symbol in prices and "price" not in ta:
             ta["price"] = prices.get(symbol)
-        observations.append(build_symbol_observation(symbol=symbol, ta=ta, strategy=strategy, macro_filter=macro_filter, trades_path=trades_path))
+        observations.append(build_symbol_observation(symbol=symbol, ta=ta, strategy=strategy, macro_filter=macro_filter, trades_path=trades_path, ea_bridge=ea_bridge))
     ta_symbols = set(ta_data.keys())
     for symbol in sorted(set(prices.keys()) - ta_symbols):
-        observations.append(build_symbol_observation(symbol=symbol, ta={"price": prices.get(symbol)}, strategy=strategy, macro_filter=macro_filter, trades_path=trades_path))
+        observations.append(build_symbol_observation(symbol=symbol, ta={"price": prices.get(symbol)}, strategy=strategy, macro_filter=macro_filter, trades_path=trades_path, ea_bridge=ea_bridge))
     state_counts = Counter(x.get("state") for x in observations)
     setup_counts = Counter((x.get("strategy") or {}).get("setup_type") or "NONE" for x in observations)
     policy_counts = Counter((x.get("policy") or {}).get("code") or "NONE" for x in observations)
     ea_counts = Counter((x.get("ea") or {}).get("grade") or "NO_EA" for x in observations)
+    ea_bridge_counts = Counter("MATCHED" if (x.get("ea_bridge") or {}).get("matched") else "NONE" for x in observations)
     ready_allowed = [x for x in observations if x.get("state") == "READY_ALLOWED"]
     ready_blocked = [x for x in observations if x.get("state") == "READY_BLOCKED_BY_POLICY"]
     raw_ready_no_ea = [x for x in observations if x.get("state") == "RAW_READY_NO_EA"]
@@ -156,7 +168,7 @@ def build_strategy_observer_snapshot(*, dashboard: Dict[str, Any], strategy, mac
         "meta": dashboard.get("meta", {}),
         "counts": dashboard.get("counts", {}),
         "positions": dashboard.get("positions", {}),
-        "summary": {"symbols_total": len(observations), "ta_symbols_count": len(ta_data), "prices_count": len(prices), "analyzed_count": len([x for x in observations if x.get("state") != "NO_TA_DATA"]), "no_ta_count": len([x for x in observations if x.get("state") == "NO_TA_DATA"]), "state_counts": dict(state_counts), "setup_counts": dict(setup_counts), "policy_counts": dict(policy_counts), "ea_counts": dict(ea_counts), "ready_allowed_count": len(ready_allowed), "ready_blocked_count": len(ready_blocked), "raw_ready_no_ea_count": len(raw_ready_no_ea)},
+        "summary": {"symbols_total": len(observations), "ta_symbols_count": len(ta_data), "prices_count": len(prices), "analyzed_count": len([x for x in observations if x.get("state") != "NO_TA_DATA"]), "no_ta_count": len([x for x in observations if x.get("state") == "NO_TA_DATA"]), "state_counts": dict(state_counts), "setup_counts": dict(setup_counts), "policy_counts": dict(policy_counts), "ea_counts": dict(ea_counts), "ea_bridge_counts": dict(ea_bridge_counts), "ready_allowed_count": len(ready_allowed), "ready_blocked_count": len(ready_blocked), "raw_ready_no_ea_count": len(raw_ready_no_ea)},
         "ready_allowed": ready_allowed[:20],
         "ready_blocked": ready_blocked[:30],
         "raw_ready_no_ea": raw_ready_no_ea[:30],
@@ -192,7 +204,10 @@ async def strategy_observer_loop(state, strategy, logger=None) -> None:
             system = dashboard.get("system", {}) or {}
             macro = system.get("macro", {}) or {}
             macro_filter = _safe_str(macro.get("global_filter") or macro.get("filter") or "allow_all", "allow_all")
-            snapshot = build_strategy_observer_snapshot(dashboard=dashboard, strategy=strategy, macro_filter=macro_filter, trades_path="trades.csv")
+            ea_bridge = build_ea_verdict_index()
+            write_latest_bridge()
+            snapshot = build_strategy_observer_snapshot(dashboard=dashboard, strategy=strategy, macro_filter=macro_filter, trades_path="trades.csv", ea_bridge=ea_bridge)
+            snapshot["ea_bridge_summary"] = ea_bridge.get("summary", {})
             guard = should_write_latest_snapshot(LATEST_PATH, snapshot)
             snapshot["latest_guard"] = guard
 
