@@ -1,4 +1,5 @@
 import asyncio
+import time
 import json
 from typing import Any, Dict, List
 
@@ -8,6 +9,33 @@ import aiohttp_cors
 from config import CONFIG
 from validators import safe_float, safe_int, safe_str
 from trade_history import build_history, build_stats
+
+SERVER_STARTED_AT = time.time()
+
+
+def _format_uptime_human_21li(seconds: int) -> str:
+    try:
+        seconds = max(0, int(seconds))
+    except Exception:
+        seconds = 0
+
+    if seconds < 60:
+        return f"{seconds}с"
+
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}м"
+
+    hours = minutes // 60
+    rest_minutes = minutes % 60
+    if hours < 24:
+        return f"{hours}ч {rest_minutes}м"
+
+    days = hours // 24
+    rest_hours = hours % 24
+    return f"{days}д {rest_hours}ч"
+
+
 
 
 class APIServer:
@@ -55,6 +83,7 @@ class APIServer:
             self.app.router.add_get("/api/stats", self.handle_stats),
             self.app.router.add_get("/api/intelligence", self.handle_intelligence),
             self.app.router.add_get("/api/context-fusion", self.handle_context_fusion),
+            self.app.router.add_get("/api/macro-regime", self.handle_macro_regime),
         ]
 
         if CONFIG.trading.debug_api_enabled:
@@ -163,8 +192,67 @@ class APIServer:
         }
 
         dashboard["context_fusion"] = self._read_context_fusion_payload()
+        dashboard["macro_regime"] = self._read_macro_regime_payload()
 
         return dashboard
+
+
+    def _read_macro_regime_payload(self) -> Dict[str, Any]:
+        # VORTEX v1.8.21l-h: expose macro_regime runtime snapshot to Android dashboard.
+        from pathlib import Path as _Path
+
+        path = _Path("_runtime/macro_regime_latest.json")
+
+        fallback = {
+            "available": False,
+            "schema": "vortex.macro_regime.api.v1",
+            "schema_version": "1.8.21l-h",
+            "source": str(path),
+            "regime": None,
+            "confidence": None,
+            "recommendation": {},
+            "reasons": [],
+            "warnings": [],
+            "heatmap": {},
+            "ichimoku_breadth": {},
+            "futures_pressure": {},
+            "vortex_pressure": {},
+            "error": None,
+        }
+
+        try:
+            if not path.exists():
+                fallback["error"] = "missing_macro_regime_latest"
+                return fallback
+
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                fallback["error"] = "invalid_macro_regime_json_root"
+                return fallback
+
+            return {
+                "available": True,
+                "schema": "vortex.macro_regime.api.v1",
+                "schema_version": "1.8.21l-h",
+                "source": str(path),
+                "snapshot_schema": data.get("schema"),
+                "snapshot_schema_version": data.get("schema_version"),
+                "ts": data.get("ts"),
+                "regime": data.get("regime"),
+                "confidence": data.get("confidence"),
+                "recommendation": data.get("recommendation") if isinstance(data.get("recommendation"), dict) else {},
+                "reasons": data.get("reasons") if isinstance(data.get("reasons"), list) else [],
+                "warnings": data.get("warnings") if isinstance(data.get("warnings"), list) else [],
+                "heatmap": data.get("heatmap") if isinstance(data.get("heatmap"), dict) else {},
+                "ichimoku_breadth": data.get("ichimoku_breadth") if isinstance(data.get("ichimoku_breadth"), dict) else {},
+                "futures_pressure": data.get("futures_pressure") if isinstance(data.get("futures_pressure"), dict) else {},
+                "vortex_pressure": data.get("vortex_pressure") if isinstance(data.get("vortex_pressure"), dict) else {},
+                "error": None,
+            }
+
+        except Exception as exc:
+            fallback["error"] = f"read_failed: {safe_str(exc)}"
+            return fallback
 
 
     def _read_context_fusion_payload(self) -> Dict[str, Any]:
@@ -227,6 +315,9 @@ class APIServer:
 
     async def handle_context_fusion(self, request: web.Request) -> web.Response:
         return web.json_response(self._read_context_fusion_payload())
+
+    async def handle_macro_regime(self, request: web.Request) -> web.Response:
+        return web.json_response(self._read_macro_regime_payload())
 
     async def handle_dashboard(self, request: web.Request) -> web.Response:
         return web.json_response(await self._build_dashboard_payload())
@@ -321,7 +412,29 @@ class APIServer:
     # --- END VORTEX v1.8.19 INTELLIGENCE API ---
 
     async def handle_health(self, request: web.Request) -> web.Response:
-        return web.json_response(await self.state.get_health_state(mode=self.mode))
+        payload = await self.state.get_health_state(mode=self.mode)
+
+        # VORTEX v1.8.21l-i-r3:
+        # Android compatibility: current app reads "uptime".
+        # Therefore "uptime" must be a human-readable duration, not just "active".
+        try:
+            if not isinstance(payload, dict):
+                payload = {}
+
+            now_ts = time.time()
+            uptime_sec = int(max(0, now_ts - SERVER_STARTED_AT))
+            uptime_human = _format_uptime_human_21li(uptime_sec)
+
+            payload["started_at"] = int(SERVER_STARTED_AT)
+            payload["uptime_sec"] = uptime_sec
+            payload["uptime_human"] = uptime_human
+            payload["uptime"] = uptime_human
+            payload["server_time"] = int(now_ts)
+        except Exception:
+            # Never break /api/health because of uptime formatting.
+            pass
+
+        return web.json_response(payload)
 
     async def handle_spot_planner(self, request: web.Request) -> web.Response:
         return web.json_response(await self.state.get_spot_planner_state())
