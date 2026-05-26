@@ -13,6 +13,7 @@ from market_heatmap import market_heatmap_loop
 from setup_zone import setup_zone_loop
 from context_fusion import context_fusion_loop
 from ichimoku_context import ichimoku_context_loop
+from macro_regime_engine import macro_regime_loop
 from loop_runner import create_task
 from market_data import MarketDataStream
 from market_oracle import MarketOracle
@@ -1190,6 +1191,15 @@ async def main() -> None:
             name="ichimoku_context",
         ),
         # --- END VORTEX v1.8.21l-c ICHIMOKU CONTEXT TASK ---
+        # --- VORTEX v1.8.21l-f-r2 MACRO REGIME TASK ---
+        create_task(
+            macro_regime_loop(
+                state=state,
+                logger=logger,
+            ),
+            name="macro_regime",
+        ),
+        # --- END VORTEX v1.8.21l-f-r2 MACRO REGIME TASK ---
         # --- VORTEX v1.8.21k-a MARKET HEATMAP TASK ---
         create_task(
             market_heatmap_loop(
