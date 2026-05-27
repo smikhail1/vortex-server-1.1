@@ -17,6 +17,7 @@ DEVICE_REPORTS_LATEST_PATH = "_runtime/advisor_device_reports_latest.json"
 ADVISOR_ACCESS_KEYS_PATH = "_runtime/advisor_access_keys.json"
 ADVISOR_ACCESS_LOG_PATH = "_runtime/advisor_access.jsonl"
 ADVISOR_ACCESS_LATEST_PATH = "_runtime/advisor_access_latest.json"
+ADVISOR_DEVICE_BINDINGS_PATH = "_runtime/advisor_device_bindings.json"
 
 
 def _format_uptime_human_21li(seconds: int) -> str:
@@ -209,6 +210,151 @@ class APIServer:
 
 
 
+    def _advisor_fingerprint_21mg(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        import hashlib as _hashlib
+
+        payload = payload if isinstance(payload, dict) else {}
+
+        fp_source = {
+            "type": safe_str(payload.get("type"), ""),
+            "mode": safe_str(payload.get("mode"), ""),
+            "dpr": safe_str(payload.get("dpr"), ""),
+            "touch": bool(payload.get("touch")),
+            "userAgent": safe_str(payload.get("userAgent"), "")[:260],
+        }
+
+        raw = json.dumps(fp_source, ensure_ascii=False, sort_keys=True)
+        return {
+            "hash": _hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+            "source": fp_source,
+            "screen": {
+                "width": safe_int(payload.get("width"), 0),
+                "height": safe_int(payload.get("height"), 0),
+            },
+        }
+
+    def _load_advisor_device_bindings_21mg(self) -> Dict[str, Any]:
+        from pathlib import Path as _Path
+        import time as _time
+
+        path = _Path(ADVISOR_DEVICE_BINDINGS_PATH)
+        if not path.exists():
+            return {
+                "schema": "vortex.advisor.device_bindings.v1",
+                "schema_version": "1.8.21m-g",
+                "created_at": int(_time.time()),
+                "bindings": {},
+            }
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                if not isinstance(data.get("bindings"), dict):
+                    data["bindings"] = {}
+                return data
+        except Exception:
+            pass
+
+        return {
+            "schema": "vortex.advisor.device_bindings.v1",
+            "schema_version": "1.8.21m-g",
+            "created_at": int(_time.time()),
+            "bindings": {},
+        }
+
+    def _save_advisor_device_bindings_21mg(self, data: Dict[str, Any]) -> None:
+        from pathlib import Path as _Path
+        import time as _time
+
+        path = _Path(ADVISOR_DEVICE_BINDINGS_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        data["schema"] = "vortex.advisor.device_bindings.v1"
+        data["schema_version"] = "1.8.21m-g"
+        data["updated_at"] = int(_time.time())
+
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+
+    def _check_or_bind_advisor_device_21mg(self, auth: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+        import time as _time
+
+        if not auth.get("allowed"):
+            return auth
+
+        raw_key = safe_str(auth.get("key"), "").strip()
+        if not raw_key:
+            auth["allowed"] = False
+            auth["reason"] = "missing_key"
+            return auth
+
+        fp = self._advisor_fingerprint_21mg(payload)
+        if not fp.get("hash"):
+            auth["allowed"] = False
+            auth["reason"] = "missing_fingerprint"
+            return auth
+
+        data = self._load_advisor_device_bindings_21mg()
+        bindings = data.get("bindings")
+        if not isinstance(bindings, dict):
+            bindings = {}
+            data["bindings"] = bindings
+
+        now = int(_time.time())
+        existing = bindings.get(raw_key)
+
+        if not existing:
+            bindings[raw_key] = {
+                "key_label": safe_str(auth.get("label"), ""),
+                "fingerprint": fp.get("hash"),
+                "fingerprint_source": fp.get("source"),
+                "first_seen": now,
+                "last_seen": now,
+                "last_screen": fp.get("screen"),
+                "last_payload": {
+                    "type": safe_str(payload.get("type"), ""),
+                    "mode": safe_str(payload.get("mode"), ""),
+                    "width": safe_int(payload.get("width"), 0),
+                    "height": safe_int(payload.get("height"), 0),
+                    "dpr": safe_float(payload.get("dpr"), 1.0),
+                    "touch": bool(payload.get("touch")),
+                    "userAgent": safe_str(payload.get("userAgent"), "")[:260],
+                },
+            }
+            self._save_advisor_device_bindings_21mg(data)
+            auth["binding"] = "created"
+            auth["device_fingerprint"] = fp.get("hash")
+            return auth
+
+        expected = safe_str(existing.get("fingerprint"), "")
+        if expected and expected != fp.get("hash"):
+            auth["allowed"] = False
+            auth["reason"] = "device_mismatch"
+            auth["binding"] = "mismatch"
+            auth["device_fingerprint"] = fp.get("hash")
+            auth["bound_fingerprint"] = expected
+            return auth
+
+        existing["last_seen"] = now
+        existing["last_screen"] = fp.get("screen")
+        existing["last_payload"] = {
+            "type": safe_str(payload.get("type"), ""),
+            "mode": safe_str(payload.get("mode"), ""),
+            "width": safe_int(payload.get("width"), 0),
+            "height": safe_int(payload.get("height"), 0),
+            "dpr": safe_float(payload.get("dpr"), 1.0),
+            "touch": bool(payload.get("touch")),
+            "userAgent": safe_str(payload.get("userAgent"), "")[:260],
+        }
+        bindings[raw_key] = existing
+        self._save_advisor_device_bindings_21mg(data)
+
+        auth["binding"] = "matched"
+        auth["device_fingerprint"] = fp.get("hash")
+        return auth
+
+
     def _load_advisor_access_keys_21md(self) -> Dict[str, Any]:
         from pathlib import Path as _Path
         path = _Path(ADVISOR_ACCESS_KEYS_PATH)
@@ -253,12 +399,17 @@ class APIServer:
         return safe_str(getattr(request, "remote", None), "")
 
     def _advisor_access_response_21md(self, auth: Dict[str, Any]) -> web.Response:
+        reason = auth.get("reason")
+        if reason == "device_mismatch":
+            message = "Цей ключ вже привʼязаний до іншого пристрою. Вам потрібен окремий ключ — зверніться до адміністратора."
+        else:
+            message = "Доступ заборонено. Немає дійсного ключа пристрою."
         return web.json_response({
             "ok": False,
             "available": False,
             "error": "advisor_access_denied",
-            "reason": auth.get("reason"),
-            "message": "Доступ заборонено. Немає дійсного ключа пристрою.",
+            "reason": reason,
+            "message": message,
         }, status=403)
 
     def _log_advisor_access_21md(self, request: web.Request, auth: Dict[str, Any], payload: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -269,6 +420,7 @@ class APIServer:
             "ts": _time.time(),
             "allowed": bool(auth.get("allowed")),
             "reason": safe_str(auth.get("reason"), ""),
+            "binding": safe_str(auth.get("binding"), ""),
             "label": safe_str(auth.get("label"), ""),
             "ip": self._advisor_client_ip_21md(request),
             "path": safe_str(request.path, ""),
@@ -320,7 +472,7 @@ class APIServer:
 
         status = "allowed" if entry["allowed"] else "denied"
         line = (
-            f"[ADVISOR_ACCESS] {status} label='{entry['label']}' reason='{entry['reason']}' "
+            f"[ADVISOR_ACCESS] {status} label='{entry['label']}' reason='{entry['reason']}' binding='{entry['binding']}' "
             f"type='{entry['type']}' screen={entry['width']}x{entry['height']} touch={entry['touch']} "
             f"ip={entry['ip']} path={entry['path']}"
         )
@@ -547,6 +699,7 @@ class APIServer:
             payload = {}
 
         auth = self._advisor_auth_from_request_21md(request)
+        auth = self._check_or_bind_advisor_device_21mg(auth, payload)
         self._log_advisor_access_21md(request, auth, payload)
 
         if not auth.get("allowed"):
