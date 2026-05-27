@@ -11,6 +11,12 @@ from validators import safe_float, safe_int, safe_str
 from trade_history import build_history, build_stats
 
 SERVER_STARTED_AT = time.time()
+PUMP_SHORT_ADVISOR_PATH = "_runtime/pump_short_advisor_latest.json"
+DEVICE_REPORTS_PATH = "_runtime/advisor_device_reports.jsonl"
+DEVICE_REPORTS_LATEST_PATH = "_runtime/advisor_device_reports_latest.json"
+ADVISOR_ACCESS_KEYS_PATH = "_runtime/advisor_access_keys.json"
+ADVISOR_ACCESS_LOG_PATH = "_runtime/advisor_access.jsonl"
+ADVISOR_ACCESS_LATEST_PATH = "_runtime/advisor_access_latest.json"
 
 
 def _format_uptime_human_21li(seconds: int) -> str:
@@ -84,6 +90,11 @@ class APIServer:
             self.app.router.add_get("/api/intelligence", self.handle_intelligence),
             self.app.router.add_get("/api/context-fusion", self.handle_context_fusion),
             self.app.router.add_get("/api/macro-regime", self.handle_macro_regime),
+            self.app.router.add_get("/api/advisor/pump-short", self.handle_pump_short_advisor),
+            self.app.router.add_get("/advisor/pump-short", self.handle_pump_short_advisor_page),
+            self.app.router.add_post("/api/advisor/device-report", self.handle_advisor_device_report),
+            self.app.router.add_get("/api/advisor/device-report/latest", self.handle_advisor_device_report_latest),
+            self.app.router.add_get("/api/advisor/access/latest", self.handle_advisor_access_latest),
         ]
 
         if CONFIG.trading.debug_api_enabled:
@@ -196,6 +207,200 @@ class APIServer:
 
         return dashboard
 
+
+
+    def _load_advisor_access_keys_21md(self) -> Dict[str, Any]:
+        from pathlib import Path as _Path
+        path = _Path(ADVISOR_ACCESS_KEYS_PATH)
+        try:
+            if not path.exists():
+                return {"available": False, "keys": [], "error": "missing_access_keys"}
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {"available": False, "keys": [], "error": "invalid_keys_json"}
+            keys = data.get("keys") if isinstance(data.get("keys"), list) else []
+            return {"available": True, "keys": keys, "error": None}
+        except Exception as exc:
+            return {"available": False, "keys": [], "error": f"read_failed: {safe_str(exc)}"}
+
+    def _advisor_auth_from_request_21md(self, request: web.Request) -> Dict[str, Any]:
+        raw_key = safe_str(request.query.get("key"), "").strip()
+        if not raw_key:
+            raw_key = safe_str(request.headers.get("X-Advisor-Key"), "").strip()
+        if not raw_key:
+            auth = safe_str(request.headers.get("Authorization"), "").strip()
+            if auth.lower().startswith("bearer "):
+                raw_key = auth[7:].strip()
+
+        keys_data = self._load_advisor_access_keys_21md()
+        if not raw_key:
+            return {"allowed": False, "reason": "missing_key", "key": "", "label": "", "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
+
+        for item in keys_data.get("keys") or []:
+            if not isinstance(item, dict):
+                continue
+            if safe_str(item.get("key"), "").strip() == raw_key:
+                if item.get("enabled", True) is False:
+                    return {"allowed": False, "reason": "disabled_key", "key": raw_key, "label": safe_str(item.get("label"), ""), "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
+                return {"allowed": True, "reason": "allowed", "key": raw_key, "label": safe_str(item.get("label"), "Device"), "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
+
+        return {"allowed": False, "reason": "bad_key", "key": raw_key, "label": "", "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
+
+    def _advisor_client_ip_21md(self, request: web.Request) -> str:
+        forwarded = safe_str(request.headers.get("X-Forwarded-For"), "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return safe_str(getattr(request, "remote", None), "")
+
+    def _advisor_access_response_21md(self, auth: Dict[str, Any]) -> web.Response:
+        return web.json_response({
+            "ok": False,
+            "available": False,
+            "error": "advisor_access_denied",
+            "reason": auth.get("reason"),
+            "message": "Доступ заборонено. Немає дійсного ключа пристрою.",
+        }, status=403)
+
+    def _log_advisor_access_21md(self, request: web.Request, auth: Dict[str, Any], payload: Dict[str, Any] = None) -> Dict[str, Any]:
+        from pathlib import Path as _Path
+        import time as _time
+        payload = payload if isinstance(payload, dict) else {}
+        entry = {
+            "ts": _time.time(),
+            "allowed": bool(auth.get("allowed")),
+            "reason": safe_str(auth.get("reason"), ""),
+            "label": safe_str(auth.get("label"), ""),
+            "ip": self._advisor_client_ip_21md(request),
+            "path": safe_str(request.path, ""),
+            "method": safe_str(request.method, ""),
+            "type": safe_str(payload.get("type"), ""),
+            "mode": safe_str(payload.get("mode"), ""),
+            "width": safe_int(payload.get("width"), 0),
+            "height": safe_int(payload.get("height"), 0),
+            "dpr": safe_float(payload.get("dpr"), 1.0),
+            "touch": bool(payload.get("touch")),
+            "userAgent": safe_str(payload.get("userAgent"), "")[:260],
+        }
+        path = _Path(ADVISOR_ACCESS_LOG_PATH)
+        latest_path = _Path(ADVISOR_ACCESS_LATEST_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()[-500:]
+            parsed = []
+            for line in lines:
+                try:
+                    item = json.loads(line)
+                    if isinstance(item, dict):
+                        parsed.append(item)
+                except Exception:
+                    pass
+            devices_by_key = {}
+            denied = []
+            for item in parsed:
+                if item.get("allowed"):
+                    key = f"{item.get('label')}:{item.get('type')}:{item.get('width')}x{item.get('height')}:{item.get('touch')}"
+                    devices_by_key[key] = item
+                else:
+                    denied.append(item)
+            latest = {
+                "available": True,
+                "schema": "vortex.advisor.access_log.v1",
+                "schema_version": "1.8.21m-d",
+                "updated_at": entry["ts"],
+                "last": entry,
+                "devices": sorted(devices_by_key.values(), key=lambda x: x.get("ts", 0), reverse=True)[:30],
+                "denied_recent": denied[-30:],
+            }
+            latest_path.write_text(json.dumps(latest, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception:
+            pass
+
+        status = "allowed" if entry["allowed"] else "denied"
+        line = (
+            f"[ADVISOR_ACCESS] {status} label='{entry['label']}' reason='{entry['reason']}' "
+            f"type='{entry['type']}' screen={entry['width']}x{entry['height']} touch={entry['touch']} "
+            f"ip={entry['ip']} path={entry['path']}"
+        )
+        print(line, flush=True)
+        try:
+            if getattr(self, "logger", None):
+                self.logger.info("ADVISOR_ACCESS", line, entry)
+        except Exception:
+            pass
+        return entry
+
+    def _read_advisor_access_latest_21md(self) -> Dict[str, Any]:
+        from pathlib import Path as _Path
+        path = _Path(ADVISOR_ACCESS_LATEST_PATH)
+        try:
+            if not path.exists():
+                return {"available": False, "schema_version": "1.8.21m-d", "devices": [], "denied_recent": [], "last": None, "error": "missing_access_log"}
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {"available": False, "schema_version": "1.8.21m-d", "devices": [], "denied_recent": [], "last": None, "error": "invalid_access_log_json"}
+            return data
+        except Exception as exc:
+            return {"available": False, "schema_version": "1.8.21m-d", "devices": [], "denied_recent": [], "last": None, "error": f"read_failed: {safe_str(exc)}"}
+
+
+    def _read_pump_short_advisor_payload(self) -> Dict[str, Any]:
+        from pathlib import Path as _Path
+        path = _Path(PUMP_SHORT_ADVISOR_PATH)
+        fallback = {"available": False, "schema": "vortex.pump_short_advisor.api.v1", "schema_version": "1.8.21m-b", "source": str(path), "items": [], "important": [], "phase_counts": {}, "symbols_count": 0, "error": None}
+        try:
+            if not path.exists():
+                fallback["error"] = "missing_pump_short_advisor_latest"
+                return fallback
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                fallback["error"] = "invalid_json_root"
+                return fallback
+            data["api_schema"] = "vortex.pump_short_advisor.api.v1"
+            data["api_schema_version"] = "1.8.21m-b"
+            data["available"] = True
+            data["error"] = None
+            return data
+        except Exception as exc:
+            fallback["error"] = f"read_failed: {safe_str(exc)}"
+            return fallback
+
+    def _read_advisor_device_report_latest(self) -> Dict[str, Any]:
+        from pathlib import Path as _Path
+        path = _Path(DEVICE_REPORTS_LATEST_PATH)
+        try:
+            if not path.exists():
+                return {"available": False, "schema_version": "1.8.21m-c", "devices": [], "last": None, "error": "missing_device_report"}
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {"available": False, "devices": [], "last": None, "error": "invalid_device_report_json"}
+        except Exception as exc:
+            return {"available": False, "schema_version": "1.8.21m-c", "devices": [], "last": None, "error": f"read_failed: {safe_str(exc)}"}
+
+    def _write_advisor_device_report(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        from pathlib import Path as _Path
+        import time as _time
+        report = {"ts": _time.time(), "type": safe_str(payload.get("type"), "unknown"), "mode": safe_str(payload.get("mode"), "unknown"), "width": safe_int(payload.get("width"), 0), "height": safe_int(payload.get("height"), 0), "dpr": safe_float(payload.get("dpr"), 1.0), "touch": bool(payload.get("touch")), "userAgent": safe_str(payload.get("userAgent"), "")[:260]}
+        path = _Path(DEVICE_REPORTS_PATH); latest_path = _Path(DEVICE_REPORTS_LATEST_PATH); path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f: f.write(json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n")
+        devices=[]
+        try:
+            parsed=[]
+            for line in path.read_text(encoding="utf-8").splitlines()[-200:]:
+                try:
+                    item=json.loads(line)
+                    if isinstance(item, dict): parsed.append(item)
+                except Exception: pass
+            by_key={}
+            for item in parsed:
+                by_key[f"{item.get('type')}:{item.get('width')}x{item.get('height')}:{item.get('touch')}"] = item
+            devices = sorted(by_key.values(), key=lambda x: x.get("ts",0), reverse=True)[:20]
+        except Exception:
+            devices=[report]
+        latest={"available": True, "schema": "vortex.advisor.device_report.v1", "schema_version": "1.8.21m-c", "updated_at": report["ts"], "last": report, "devices": devices}
+        latest_path.write_text(json.dumps(latest, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        return latest
 
     def _read_macro_regime_payload(self) -> Dict[str, Any]:
         # VORTEX v1.8.21l-h: expose macro_regime runtime snapshot to Android dashboard.
@@ -318,6 +523,60 @@ class APIServer:
 
     async def handle_macro_regime(self, request: web.Request) -> web.Response:
         return web.json_response(self._read_macro_regime_payload())
+
+    async def handle_pump_short_advisor(self, request: web.Request) -> web.Response:
+        auth = self._advisor_auth_from_request_21md(request)
+        if not auth.get("allowed"):
+            self._log_advisor_access_21md(request, auth, {})
+            return self._advisor_access_response_21md(auth)
+        return web.json_response(self._read_pump_short_advisor_payload())
+
+    async def handle_pump_short_advisor_page(self, request: web.Request) -> web.Response:
+        from pathlib import Path as _Path
+        path = _Path("web/pump_short_advisor.html")
+        if not path.exists():
+            return web.Response(text="<html><body><h1>Радник після пампу</h1><p>HTML-файл не знайдено.</p></body></html>", content_type="text/html", charset="utf-8")
+        return web.Response(text=path.read_text(encoding="utf-8"), content_type="text/html", charset="utf-8")
+
+    async def handle_advisor_device_report(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception:
+            payload = {}
+
+        auth = self._advisor_auth_from_request_21md(request)
+        self._log_advisor_access_21md(request, auth, payload)
+
+        if not auth.get("allowed"):
+            return self._advisor_access_response_21md(auth)
+
+        payload["access_label"] = auth.get("label")
+        data = self._write_advisor_device_report(payload)
+        return web.json_response({
+            "ok": True,
+            "access": {
+                "allowed": True,
+                "label": auth.get("label"),
+                "reason": auth.get("reason"),
+            },
+            "device_report": data,
+        })
+
+    async def handle_advisor_device_report_latest(self, request: web.Request) -> web.Response:
+        auth = self._advisor_auth_from_request_21md(request)
+        if not auth.get("allowed"):
+            self._log_advisor_access_21md(request, auth, {})
+            return self._advisor_access_response_21md(auth)
+        return web.json_response(self._read_advisor_device_report_latest())
+
+    async def handle_advisor_access_latest(self, request: web.Request) -> web.Response:
+        auth = self._advisor_auth_from_request_21md(request)
+        if not auth.get("allowed"):
+            self._log_advisor_access_21md(request, auth, {})
+            return self._advisor_access_response_21md(auth)
+        return web.json_response(self._read_advisor_access_latest_21md())
 
     async def handle_dashboard(self, request: web.Request) -> web.Response:
         return web.json_response(await self._build_dashboard_payload())

@@ -14,6 +14,7 @@ from setup_zone import setup_zone_loop
 from context_fusion import context_fusion_loop
 from ichimoku_context import ichimoku_context_loop
 from macro_regime_engine import macro_regime_loop
+from pump_short_advisor import pump_short_advisor_loop
 from loop_runner import create_task
 from market_data import MarketDataStream
 from market_oracle import MarketOracle
@@ -1200,6 +1201,16 @@ async def main() -> None:
             name="macro_regime",
         ),
         # --- END VORTEX v1.8.21l-f-r2 MACRO REGIME TASK ---
+        # --- VORTEX v1.8.21m-a PUMP SHORT ADVISOR TASK ---
+        create_task(
+            pump_short_advisor_loop(
+                state=state,
+                candle_service=candle_service,
+                logger=logger,
+            ),
+            name="pump_short_advisor",
+        ),
+        # --- END VORTEX v1.8.21m-a PUMP SHORT ADVISOR TASK ---
         # --- VORTEX v1.8.21k-a MARKET HEATMAP TASK ---
         create_task(
             market_heatmap_loop(
