@@ -67,8 +67,9 @@ def analyze_symbol(symbol,candles_30m,candles_4h=None):
     ema20=ema(closes[-60:],20); ema50=ema(closes[-80:],50)
     de20=pct(price,ema20) if ema20 else 0; de50=pct(price,ema50) if ema50 else 0
     rs=rsi(closes); vr=vol_ratio(c); hage=local_high_age(c); lh=lower_high(c); sup=support(c); bd=pct(price,sup) if sup else 0
-    pump_detected=pump24>=18 or pump6>=9; over=de20>=6 or de50>=10 or rs>=72
+    pump_detected=pump24>=18 or pump6>=9; early_pump_watch=(not pump_detected) and (pump24>=8 or pump6>=4) and vr>=1.5; over=de20>=6 or de50>=10 or rs>=72
     score=0; notes=[]
+    if early_pump_watch: score+=14; notes.append('Ранній розгін: стежимо, але SHORT ще зарано')
     if pump_detected: score+=20; notes.append('Виявлено сильний памп')
     if vr>=2: score+=12; notes.append('Обʼєм вище середнього')
     elif vr<0.8: notes.append('Обʼєм слабкий')
@@ -82,7 +83,8 @@ def analyze_symbol(symbol,candles_30m,candles_4h=None):
     if len(c4)>=20:
         cc=[x['close'] for x in c4]; e4=ema(cc[-40:],20); ctx4='above_ema20' if cc[-1]>e4 else 'below_ema20'
         if ctx4=='below_ema20': score+=8; notes.append('4H контекст слабшає')
-    if not pump_detected: phase='NO_PUMP'; wait='pump'; score=min(score,25); notes=notes or ['Пампу не виявлено']
+    if early_pump_watch: phase='EARLY_PUMP_WATCH'; wait='pump_confirmation'; score=max(score,30)
+    elif not pump_detected: phase='NO_PUMP'; wait='pump'; score=min(score,25); notes=notes or ['Пампу не виявлено']
     elif broken and lh: phase='SHORT_CANDIDATE'; wait='breakdown_retest_confirmation'
     elif near and (lh or hage>=6): phase='BREAKDOWN_WATCH'; wait='breakdown'
     elif lh or hage>=6: phase='DISTRIBUTION_WATCH'; wait='support_test'
@@ -113,7 +115,7 @@ def build_snapshot(symbols,candle_service):
             rows.append({'symbol':sym(s),'available':False,'phase':'ERROR','score':0,'reason':ss(e)[:160],'waiting_for':'fix_error','notes':['Помилка аналізу']})
     pc={}
     for r in rows: pc[r.get('phase') or 'UNKNOWN']=pc.get(r.get('phase') or 'UNKNOWN',0)+1
-    pr={'SHORT_CANDIDATE':1,'BREAKDOWN_WATCH':2,'DISTRIBUTION_WATCH':3,'OVEREXTENDED':4,'PUMP_DETECTED':5,'NO_PUMP':9,'NO_DATA':10,'ERROR':11}
+    pr={'SHORT_CANDIDATE':1,'BREAKDOWN_WATCH':2,'DISTRIBUTION_WATCH':3,'OVEREXTENDED':4,'PUMP_DETECTED':5,'EARLY_PUMP_WATCH':6,'NO_PUMP':9,'NO_DATA':10,'ERROR':11}
     imp=sorted(rows,key=lambda x:(pr.get(x.get('phase'),99),-si(x.get('score')),x.get('symbol') or ''))[:40]
     return {'schema':'vortex.pump_short_advisor.v1','schema_version':SCHEMA_VERSION,'ts':time.time(),'available':True,'symbols_count':len(rows),'phase_counts':pc,'important':imp,'items':rows,'note':'Read-only advisor. Не відкриває угоди та не впливає на стратегію.'}
 def write_json(path,data):
@@ -128,7 +130,7 @@ async def pump_short_advisor_loop(state,candle_service,logger=None):
             if logger: logger.info('PUMP_SHORT_ADVISOR','snapshot updated',{'symbols':snap.get('symbols_count'),'phase_counts':snap.get('phase_counts')})
             if state:
                 try:
-                    c=snap.get('phase_counts') or {}; await state.add_sys_log('📉 [PUMP SHORT ADVISOR]', f"оновлено | short={c.get('SHORT_CANDIDATE',0)} breakdown={c.get('BREAKDOWN_WATCH',0)} distribution={c.get('DISTRIBUTION_WATCH',0)}")
+                    c=snap.get('phase_counts') or {}; await state.add_sys_log('📉 [PUMP SHORT ADVISOR]', f"оновлено | early={c.get('EARLY_PUMP_WATCH',0)} short={c.get('SHORT_CANDIDATE',0)} breakdown={c.get('BREAKDOWN_WATCH',0)} distribution={c.get('DISTRIBUTION_WATCH',0)}")
                 except Exception: pass
         except Exception as e:
             if logger: logger.warning('PUMP_SHORT_ADVISOR','loop failed',{'error':ss(e)[:220]})
