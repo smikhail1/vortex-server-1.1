@@ -169,7 +169,7 @@ class MomentumEngine:
 
         reason = f"momentum {direction_reason} | range={range_pct:.2f}% | change={change_pct:.2f}% | vol={vol_ratio:.2f} | score={score}"
         if market_regime == "dead": reason += " | dead override candidate"
-        if confirmed: reason += " | confirmed"
+        if confirmed: reason += " | momentum_confirmed"
         else: reason += " | watch only"
 
         return MomentumSignal(True, bool(confirmed), side, int(score), setup_type, reason, trigger, invalidation, range_pct, change_pct, vol_ratio)

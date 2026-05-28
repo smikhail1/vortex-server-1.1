@@ -135,3 +135,172 @@ async def pump_short_advisor_loop(state,candle_service,logger=None):
         except Exception as e:
             if logger: logger.warning('PUMP_SHORT_ADVISOR','loop failed',{'error':ss(e)[:220]})
         await asyncio.sleep(30)
+
+# ===== VORTEX 21m-i trade plan wrapper =====
+def _tp_safe_float_21mi(v, default=0.0):
+    try:
+        if v is None or v == "":
+            return float(default)
+        return float(v)
+    except Exception:
+        return float(default)
+
+
+def _tp_clean_candles_21mi(candles):
+    out = []
+    for c in candles or []:
+        if not isinstance(c, dict):
+            continue
+        try:
+            item = {
+                "ts": int(float(c.get("ts", 0) or 0)),
+                "open": _tp_safe_float_21mi(c.get("open"), 0.0),
+                "high": _tp_safe_float_21mi(c.get("high"), 0.0),
+                "low": _tp_safe_float_21mi(c.get("low"), 0.0),
+                "close": _tp_safe_float_21mi(c.get("close"), 0.0),
+                "volume": _tp_safe_float_21mi(c.get("volume"), 0.0),
+            }
+            if item["high"] > 0 and item["low"] > 0 and item["close"] > 0 and item["high"] >= item["low"]:
+                out.append(item)
+        except Exception:
+            pass
+    out.sort(key=lambda x: x.get("ts", 0))
+    return out
+
+
+def _tp_atr_21mi(candles, period=14):
+    c = _tp_clean_candles_21mi(candles)
+    if len(c) < 2:
+        return 0.0
+    trs = []
+    prev = c[0]["close"]
+    for x in c[1:]:
+        tr = max(
+            x["high"] - x["low"],
+            abs(x["high"] - prev),
+            abs(x["low"] - prev),
+        )
+        trs.append(tr)
+        prev = x["close"]
+    recent = trs[-period:] if len(trs) >= period else trs
+    if not recent:
+        return 0.0
+    return sum(recent) / len(recent)
+
+
+def _tp_round_21mi(v):
+    try:
+        v = float(v)
+    except Exception:
+        return 0.0
+    if v >= 100:
+        return round(v, 2)
+    if v >= 1:
+        return round(v, 4)
+    return round(v, 8)
+
+
+def _tp_rr_21mi(entry, stop, target):
+    risk = stop - entry
+    if risk <= 0:
+        return 0.0
+    reward = entry - target
+    return round(max(0.0, reward / risk), 2)
+
+
+def _build_trade_plan_21mi(row, candles_30m=None, candles_4h=None):
+    # Plan appears only for a strong SHORT_CANDIDATE.
+    # No plan for watch/early/no-pump states.
+    if not isinstance(row, dict):
+        return None
+
+    phase = row.get("phase")
+    score = int(_tp_safe_float_21mi(row.get("score"), 0))
+
+    if phase != "SHORT_CANDIDATE" or score < 55:
+        return None
+
+    price = _tp_safe_float_21mi(row.get("price"), 0.0)
+    support = _tp_safe_float_21mi(row.get("support_level"), 0.0)
+    if price <= 0 or support <= 0:
+        return None
+
+    c = _tp_clean_candles_21mi(candles_30m or [])
+    if len(c) < 20:
+        return None
+
+    atr = _tp_atr_21mi(c, 14)
+    if atr <= 0:
+        atr = max(price * 0.01, 0.00000001)
+
+    recent = c[-24:] if len(c) >= 24 else c
+    recent_high = max(x["high"] for x in recent)
+    recent_low = min(x["low"] for x in recent)
+
+    entry_center = support
+    entry_from = support - atr * 0.25
+    entry_to = support + atr * 0.15
+
+    stop = max(entry_to + atr * 1.2, support + atr * 1.2)
+    if recent_high < support + atr * 3.0:
+        stop = max(stop, recent_high + atr * 0.25)
+
+    risk = stop - entry_center
+    if risk <= 0:
+        return None
+
+    tp1 = entry_center - risk * 1.0
+    tp2 = entry_center - risk * 2.0
+    tp3 = entry_center - risk * 3.0
+
+    structural_target = recent_low if recent_low < entry_center else None
+
+    return {
+        "available": True,
+        "quality": "GOOD_ENTRY_ONLY",
+        "side": "SHORT",
+        "entry_type": "breakdown_retest",
+        "status": "actionable_after_retest",
+        "entry_zone": {
+            "from": _tp_round_21mi(entry_from),
+            "to": _tp_round_21mi(entry_to),
+            "center": _tp_round_21mi(entry_center),
+        },
+        "stop": _tp_round_21mi(stop),
+        "tp1": _tp_round_21mi(tp1),
+        "tp2": _tp_round_21mi(tp2),
+        "tp3": _tp_round_21mi(tp3),
+        "rr": {
+            "tp1": _tp_rr_21mi(entry_center, stop, tp1),
+            "tp2": _tp_rr_21mi(entry_center, stop, tp2),
+            "tp3": _tp_rr_21mi(entry_center, stop, tp3),
+        },
+        "atr_30m": _tp_round_21mi(atr),
+        "structure": {
+            "support": _tp_round_21mi(support),
+            "recent_high": _tp_round_21mi(recent_high),
+            "recent_low": _tp_round_21mi(recent_low),
+            "structural_target": _tp_round_21mi(structural_target) if structural_target else None,
+        },
+        "management": [
+            "Вхід тільки після breakdown + retest знизу.",
+            "TP1: закрити 30-50% і перевести stop у BE.",
+            "TP2: основна фіксація.",
+            "TP3: тільки якщо імпульс сильний і ринок підтримує SHORT.",
+        ],
+        "warning": "Не входити, якщо ціна повернулась вище support/retest-зони.",
+    }
+
+
+try:
+    _orig_analyze_symbol_21mi
+except NameError:
+    _orig_analyze_symbol_21mi = analyze_symbol
+
+    def analyze_symbol(symbol, candles_30m, candles_4h=None):
+        row = _orig_analyze_symbol_21mi(symbol, candles_30m, candles_4h)
+        if isinstance(row, dict):
+            row["trade_plan"] = _build_trade_plan_21mi(row, candles_30m, candles_4h)
+        return row
+# ===== END VORTEX 21m-i trade plan wrapper =====
+

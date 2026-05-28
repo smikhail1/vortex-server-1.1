@@ -1,4 +1,4 @@
-<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VORTEX — Радник після пампу</title><style>body{margin:0;background:#0b1020;color:#eaf0ff;font-family:system-ui,Segoe UI,Arial}.wrap{max-width:1280px;margin:auto;padding:12px}.top{position:sticky;top:0;background:#10182bdd;backdrop-filter:blur(12px);border-bottom:1px solid #ffffff20}.head{max-width:1280px;margin:auto;padding:12px;display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap}h1{margin:0;font-size:clamp(20px,4vw,30px)}.sub,.muted{color:#9aa8c7}.pill{border:1px solid #ffffff25;border-radius:999px;padding:6px 9px;display:inline-block;margin:2px}.ok{color:#4ade80;border-color:#4ade8060}.bad{color:#fb7185;border-color:#fb718560}.warn{color:#f59e0b;border-color:#f59e0b60}.card{background:#121a2e;border:1px solid #ffffff18;border-radius:18px;padding:12px;margin-top:12px;box-shadow:0 10px 30px #0005}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.stat{background:#ffffff0c;border-radius:14px;padding:10px}.k{color:#9aa8c7;font-size:12px}.v{font-size:20px;font-weight:800}.notice{display:none;background:#f59e0b18;border:1px solid #f59e0b70;color:#fcdca5;border-radius:14px;padding:10px;margin-top:10px}.notice.show{display:block}.toolbar{display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap;margin:12px 0}button,input{border:1px solid #ffffff25;background:#ffffff10;color:#eaf0ff;border-radius:12px;padding:9px}button.active{border-color:#60a5fa;background:#60a5fa30}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #ffffff18;padding:9px;text-align:left;font-size:13px}th{color:#9aa8c7}.sym{font-weight:800}.phase{font-weight:800}.SHORT_CANDIDATE{color:#fb7185}.BREAKDOWN_WATCH,.OVEREXTENDED{color:#f59e0b}.DISTRIBUTION_WATCH{color:#c084fc}.PUMP_DETECTED{color:#60a5fa}.NO_PUMP{color:#9aa8c7}.cards{display:none;gap:10px}.item{background:#ffffff0b;border:1px solid #ffffff18;border-radius:16px;padding:12px}.row{display:flex;justify-content:space-between;gap:10px;margin-top:7px;color:#9aa8c7}.row b{color:#eaf0ff}@media(max-width:1024px){.stats{grid-template-columns:repeat(2,1fr)}.table{display:none}.cards{display:grid;grid-template-columns:repeat(2,1fr)}}@media(max-width:620px){.stats,.cards{grid-template-columns:1fr}input{width:100%}button{flex:1}}</style></head><body><div class="top"><div class="head"><div><h1>📉 Радник після пампу</h1><div class="sub">Сценарний радар. Не відкриває угоди й не впливає на стратегію.</div></div><div><span id="api" class="pill warn">API: очікування</span><span id="upd" class="pill">Оновлено: —</span><button onclick="resetAdvisorKey()" title="Змінити ключ пристрою">Змінити ключ</button></div></div></div><main class="wrap"><section class="card"><div class="stats"><div class="stat"><div class="k">Кандидати у SHORT</div><div id="s1" class="v">0</div></div><div class="stat"><div class="k">Очікуємо пробій</div><div id="s2" class="v">0</div></div><div class="stat"><div class="k">Розподіл</div><div id="s3" class="v">0</div></div><div class="stat"><div class="k">Перегрів</div><div id="s4" class="v">0</div></div><div class="stat"><div class="k">Усього монет</div><div id="s5" class="v">0</div></div></div><div id="notice" class="notice">⚠️ Сервер щойно перезапущено або радник тільки стартував. Дані можуть бути сирими кілька хвилин.</div><div class="muted" style="margin-top:10px"><span id="dev">Пристрій: —</span> · <span id="scr">Екран: —</span> · <span id="mode">Режим: —</span> · <span id="touch">Touch: —</span></div></section><div class="toolbar"><div id="filters"><button data-f="ALL" class="active">Усі</button><button data-f="SHORT_CANDIDATE">SHORT</button><button data-f="BREAKDOWN_WATCH">Пробій</button><button data-f="DISTRIBUTION_WATCH">Розподіл</button><button data-f="OVEREXTENDED">Перегрів</button><button data-f="PUMP_DETECTED">Памп</button></div><input id="q" placeholder="Пошук символу..."></div><section class="card"><div class="table"><table><thead><tr><th>Символ</th><th>Фаза</th><th>Score</th><th>Памп 24г</th><th>Памп 6г</th><th>Обʼєм</th><th>EMA20</th><th>Підтримка</th><th>Чекаємо</th><th>Нотатки</th></tr></thead><tbody id="rows"></tbody></table></div><div id="cards" class="cards"></div></section></main><script>
+<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VORTEX — Радник після пампу</title><style>body{margin:0;background:#0b1020;color:#eaf0ff;font-family:system-ui,Segoe UI,Arial}.wrap{max-width:1280px;margin:auto;padding:12px}.top{position:sticky;top:0;background:#10182bdd;backdrop-filter:blur(12px);border-bottom:1px solid #ffffff20}.head{max-width:1280px;margin:auto;padding:12px;display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap}h1{margin:0;font-size:clamp(20px,4vw,30px)}.sub,.muted{color:#9aa8c7}.pill{border:1px solid #ffffff25;border-radius:999px;padding:6px 9px;display:inline-block;margin:2px}.ok{color:#4ade80;border-color:#4ade8060}.bad{color:#fb7185;border-color:#fb718560}.warn{color:#f59e0b;border-color:#f59e0b60}.card{background:#121a2e;border:1px solid #ffffff18;border-radius:18px;padding:12px;margin-top:12px;box-shadow:0 10px 30px #0005}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.stat{background:#ffffff0c;border-radius:14px;padding:10px}.k{color:#9aa8c7;font-size:12px}.v{font-size:20px;font-weight:800}.notice{display:none;background:#f59e0b18;border:1px solid #f59e0b70;color:#fcdca5;border-radius:14px;padding:10px;margin-top:10px}.notice.show{display:block}.toolbar{display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap;margin:12px 0}button,input{border:1px solid #ffffff25;background:#ffffff10;color:#eaf0ff;border-radius:12px;padding:9px}button.active{border-color:#60a5fa;background:#60a5fa30}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #ffffff18;padding:9px;text-align:left;font-size:13px}th{color:#9aa8c7}.sym{font-weight:800}.phase{font-weight:800}.SHORT_CANDIDATE{color:#fb7185}.BREAKDOWN_WATCH,.OVEREXTENDED{color:#f59e0b}.DISTRIBUTION_WATCH{color:#c084fc}.EARLY_PUMP_WATCH,.PUMP_DETECTED{color:#60a5fa}.NO_PUMP{color:#9aa8c7}.empty{padding:18px;border:1px dashed #ffffff30;border-radius:14px;color:#9aa8c7;text-align:center}.cards{display:none;gap:10px}.item{background:#ffffff0b;border:1px solid #ffffff18;border-radius:16px;padding:12px}.row{display:flex;justify-content:space-between;gap:10px;margin-top:7px;color:#9aa8c7}.row b{color:#eaf0ff}.tradeplan{margin-top:8px;padding:9px;border:1px solid #4ade8050;background:#4ade8012;border-radius:12px;color:#d9ffe6}.tradeplan b{color:#4ade80}.tradeplan .warn{color:#fcdca5;border:0;padding:0;margin:0}@media(max-width:1024px){.stats{grid-template-columns:repeat(2,1fr)}.table{display:none}.cards{display:grid;grid-template-columns:repeat(2,1fr)}}@media(max-width:620px){.stats,.cards{grid-template-columns:1fr}input{width:100%}button{flex:1}}</style></head><body><div class="top"><div class="head"><div><h1>📉 Радник після пампу</h1><div class="sub">Сценарний радар. Не відкриває угоди й не впливає на стратегію.</div></div><div><span id="api" class="pill warn">API: очікування</span><span id="upd" class="pill">Оновлено: —</span><button onclick="resetAdvisorKey()" title="Змінити ключ пристрою">Змінити ключ</button></div></div></div><main class="wrap"><section class="card"><div class="stats"><div class="stat"><div class="k">Кандидати у SHORT</div><div id="s1" class="v">0</div></div><div class="stat"><div class="k">Очікуємо пробій</div><div id="s2" class="v">0</div></div><div class="stat"><div class="k">Розподіл</div><div id="s3" class="v">0</div></div><div class="stat"><div class="k">Перегрів</div><div id="s4" class="v">0</div></div><div class="stat"><div class="k">Усього монет</div><div id="s5" class="v">0</div></div></div><div id="notice" class="notice">⚠️ Сервер щойно перезапущено або радник тільки стартував. Дані можуть бути сирими кілька хвилин.</div><div class="muted" style="margin-top:10px"><span id="dev">Пристрій: —</span> · <span id="scr">Екран: —</span> · <span id="mode">Режим: —</span> · <span id="touch">Touch: —</span></div></section><div class="toolbar"><div id="filters"><button data-f="ALL" class="active">Усі</button><button data-f="EARLY_PUMP_WATCH">Ранній памп</button><button data-f="SHORT_CANDIDATE">SHORT</button><button data-f="BREAKDOWN_WATCH">Пробій</button><button data-f="DISTRIBUTION_WATCH">Розподіл</button><button data-f="OVEREXTENDED">Перегрів</button><button data-f="PUMP_DETECTED">Памп</button></div><input id="q" placeholder="Пошук символу..."></div><section class="card"><div class="table"><table><thead><tr><th>Символ</th><th>Фаза</th><th>Score</th><th>Памп 24г</th><th>Памп 6г</th><th>Обʼєм</th><th>EMA20</th><th>Підтримка</th><th>Чекаємо</th><th>Нотатки</th></tr></thead><tbody id="rows"></tbody></table></div><div id="cards" class="cards"></div></section></main><script>
 function advisorKey(){
   const u=new URL(location.href);
   const k=(u.searchParams.get('key')||'').trim();
@@ -40,6 +40,212 @@ function showDenied(msg){
   notice.classList.add('show');
   notice.textContent='⛔ '+(msg||'Доступ заборонено. Введіть ключ пристрою.');
 }
-let all=[],f='ALL'; const L={EARLY_PUMP_WATCH:'Ранній памп',NO_PUMP:'Немає пампу',PUMP_DETECTED:'Виявлено памп',OVEREXTENDED:'Перегрів',DISTRIBUTION_WATCH:'Ймовірний розподіл',BREAKDOWN_WATCH:'Очікуємо пробій',SHORT_CANDIDATE:'Кандидат у SHORT',INVALIDATED:'Сценарій скасовано',NO_DATA:'Немає даних',ERROR:'Помилка'}; const W={pump:'памп',distribution_signs:'ознаки розподілу',cooldown_or_lower_high:'охолодження / lower high',support_test:'тест підтримки',breakdown:'пробій підтримки',breakdown_retest_confirmation:'ретест після пробою',more_data:'більше даних'}; function dev(){let w=innerWidth,h=innerHeight,t=('ontouchstart'in window)||navigator.maxTouchPoints>0,type=w<600?'телефон':w<=1024?'планшет':'ПК',mode=w<600?'мобільний':w<=1024?'планшетний':'десктопний',d={type,mode,width:w,height:h,dpr:devicePixelRatio||1,touch:t,userAgent:navigator.userAgent,ts:Date.now()/1000}; document.getElementById('dev').textContent='Пристрій: '+type; document.getElementById('scr').textContent=`Екран: ${w}×${h} · DPR ${d.dpr}`; document.getElementById('mode').textContent='Режим: '+mode; document.getElementById('touch').textContent='Touch: '+(t?'так':'ні'); if(advisorKey()) fetch('/api/advisor/device-report',{method:'POST',headers:advisorHeaders({'Content-Type':'application/json'}),body:JSON.stringify(d)}).catch(()=>{});} function render(items){rows.innerHTML='';cards.innerHTML=''; for(const x of items.slice(0,120)){let ph=L[x.phase]||x.phase||'—',wa=W[x.waiting_for]||x.waiting_for||'—',notes=(x.notes||[]).join(' · '); rows.insertAdjacentHTML('beforeend',`<tr><td class="sym">${x.symbol||'—'}</td><td class="phase ${x.phase}">${ph}</td><td>${x.score??0}</td><td>${x.pump_pct_24h??'—'}%</td><td>${x.pump_pct_6h??'—'}%</td><td>${x.volume_ratio??'—'}x</td><td>${x.distance_ema20_pct??'—'}%</td><td>${x.support_level??'—'}</td><td>${wa}</td><td class="muted">${notes}</td></tr>`); cards.insertAdjacentHTML('beforeend',`<div class="item"><div class="sym">${x.symbol||'—'}</div><div class="row"><span>Фаза</span><b class="phase ${x.phase}">${ph}</b></div><div class="row"><span>Score</span><b>${x.score??0}</b></div><div class="row"><span>Памп 24г</span><b>${x.pump_pct_24h??'—'}%</b></div><div class="row"><span>Обʼєм</span><b>${x.volume_ratio??'—'}x</b></div><div class="row"><span>Підтримка</span><b>${x.support_level??'—'}</b></div><div class="muted" style="margin-top:8px">${notes}</div></div>`);} } function filt(){let q=document.getElementById('q').value.toUpperCase().trim(),it=all.slice(); if(f!='ALL')it=it.filter(x=>x.phase==f); if(q)it=it.filter(x=>(x.symbol||'').includes(q)); render(it);} async function load(){if(!advisorKey()){if(!ensureKeyPrompt())return;} try{let r=await fetch('/api/advisor/pump-short',{cache:'no-store',headers:advisorHeaders()}); if(!r.ok){let e={};try{e=await r.json()}catch(_){};localStorage.removeItem('advisor_key');showDenied((e.message||('HTTP '+r.status))+' Натисніть «Змінити ключ» або оновіть сторінку й введіть ключ ще раз.');return;} let d=await r.json(); api.textContent='API: онлайн'; api.className='pill ok'; upd.textContent='Оновлено: '+new Date().toLocaleTimeString('uk-UA'); let c=d.phase_counts||{}; s1.textContent=c.SHORT_CANDIDATE||0; s2.textContent=c.BREAKDOWN_WATCH||0; s3.textContent=c.DISTRIBUTION_WATCH||0; s4.textContent=c.OVEREXTENDED||0; s5.textContent=d.symbols_count||0; let age=Date.now()/1000-(d.ts||0); notice.classList.toggle('show',!d.ts||age>180||(d.symbols_count||0)==0); all=d.important||d.items||[]; filt();}catch(e){api.textContent='API: недоступний';api.className='pill bad';notice.classList.add('show')}} document.querySelectorAll('button[data-f]').forEach(b=>b.onclick=()=>{document.querySelectorAll('button[data-f]').forEach(x=>x.classList.remove('active'));b.classList.add('active');f=b.dataset.f;filt()}); q.oninput=filt; addEventListener('resize',dev); if(ensureKeyPrompt()){ dev(); load(); setInterval(load,7000); setInterval(dev,60000); }
+let all=[],f='ALL';
+const L={
+  EARLY_PUMP_WATCH:'Ранній памп',
+  NO_PUMP:'Немає пампу',
+  PUMP_DETECTED:'Виявлено памп',
+  OVEREXTENDED:'Перегрів',
+  DISTRIBUTION_WATCH:'Ймовірний розподіл',
+  BREAKDOWN_WATCH:'Очікуємо пробій',
+  SHORT_CANDIDATE:'Кандидат у SHORT',
+  INVALIDATED:'Сценарій скасовано',
+  NO_DATA:'Немає даних',
+  ERROR:'Помилка'
+};
+const W={
+  pump:'памп',
+  pump_confirmation:'підтвердження пампу',
+  distribution_signs:'ознаки розподілу',
+  cooldown_or_lower_high:'охолодження / lower high',
+  support_test:'тест підтримки',
+  breakdown:'пробій підтримки',
+  breakdown_retest_confirmation:'ретест після пробою',
+  more_data:'більше даних'
+}; 
+
+function tradePlanHtml(x){
+  const p=x.trade_plan;
+  if(!p || !p.available) return '';
+  const ez=p.entry_zone||{};
+  const rr=p.rr||{};
+  const mg=(p.management||[]).slice(0,2).join(' · ');
+  return '<div class="tradeplan">'+
+    '<b>План SHORT</b><br>'+
+    'Вхід: '+(ez.from??'—')+' - '+(ez.to??'—')+' · Stop: '+(p.stop??'—')+'<br>'+
+    'TP1: '+(p.tp1??'—')+' ('+(rr.tp1??'—')+'R) · '+
+    'TP2: '+(p.tp2??'—')+' ('+(rr.tp2??'—')+'R) · '+
+    'TP3: '+(p.tp3??'—')+' ('+(rr.tp3??'—')+'R)<br>'+
+    '<span class="warn">'+(p.warning||'План активний тільки для якісного входу.')+'</span><br>'+
+    '<span>'+mg+'</span>'+
+  '</div>';
+}
+
+function el(id){return document.getElementById(id)}
+function rowsEl(){return el('rows')}
+function cardsEl(){return el('cards')}
+
+function dev(){
+  let w=innerWidth,h=innerHeight,t=('ontouchstart'in window)||navigator.maxTouchPoints>0;
+  let type=w<600?'телефон':w<=1024?'планшет':'ПК';
+  let mode=w<600?'мобільний':w<=1024?'планшетний':'десктопний';
+  let d={type,mode,width:w,height:h,dpr:devicePixelRatio||1,touch:t,userAgent:navigator.userAgent,ts:Date.now()/1000};
+
+  el('dev').textContent='Пристрій: '+type;
+  el('scr').textContent='Екран: '+w+'x'+h+' · DPR '+d.dpr;
+  el('mode').textContent='Режим: '+mode;
+  el('touch').textContent='Touch: '+(t?'так':'ні');
+
+  if(advisorKey()){
+    fetch('/api/advisor/device-report',{
+      method:'POST',
+      headers:advisorHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify(d)
+    }).catch(()=>{});
+  }
+}
+
+function phaseCount(phase){
+  if(phase==='ALL') return all.length;
+  return all.filter(x=>x.phase===phase).length;
+}
+
+function updateFilterButtons(){
+  document.querySelectorAll('button[data-f]').forEach(b=>{
+    const phase=b.dataset.f;
+    const base={
+      ALL:'Усі',
+      EARLY_PUMP_WATCH:'Ранній памп',
+      SHORT_CANDIDATE:'SHORT',
+      BREAKDOWN_WATCH:'Пробій',
+      DISTRIBUTION_WATCH:'Розподіл',
+      OVEREXTENDED:'Перегрів',
+      PUMP_DETECTED:'Памп'
+    }[phase] || phase;
+
+    b.textContent = base+' '+phaseCount(phase);
+    b.classList.toggle('active', phase===f);
+  });
+}
+
+function emptyMessage(){
+  const name = f==='ALL' ? 'за поточними даними' : (L[f] || f);
+  return '<tr><td colspan="10"><div class="empty">Немає монет у фільтрі: '+name+'</div></td></tr>';
+}
+
+function render(items){
+  const rows=rowsEl(), cards=cardsEl();
+  rows.innerHTML='';
+  cards.innerHTML='';
+
+  if(!items.length){
+    rows.innerHTML=emptyMessage();
+    cards.innerHTML='<div class="empty">Немає монет у цьому фільтрі</div>';
+    updateFilterButtons();
+    return;
+  }
+
+  for(const x of items.slice(0,120)){
+    let ph=L[x.phase]||x.phase||'—';
+    let wa=W[x.waiting_for]||x.waiting_for||'—';
+    let notes=(x.notes||[]).join(' · ');
+
+    rows.insertAdjacentHTML('beforeend',
+      '<tr>'+
+      '<td class="sym">'+(x.symbol||'—')+'</td>'+
+      '<td class="phase '+x.phase+'">'+ph+'</td>'+
+      '<td>'+(x.score??0)+'</td>'+
+      '<td>'+(x.pump_pct_24h??'—')+'%</td>'+
+      '<td>'+(x.pump_pct_6h??'—')+'%</td>'+
+      '<td>'+(x.volume_ratio??'—')+'x</td>'+
+      '<td>'+(x.distance_ema20_pct??'—')+'%</td>'+
+      '<td>'+(x.support_level??'—')+'</td>'+
+      '<td>'+wa+'</td>'+
+      '<td class="muted">'+notes+tradePlanHtml(x)+'</td>'+
+      '</tr>'
+    );
+
+    cards.insertAdjacentHTML('beforeend',
+      '<div class="item">'+
+      '<div class="sym">'+(x.symbol||'—')+'</div>'+
+      '<div class="row"><span>Фаза</span><b class="phase '+x.phase+'">'+ph+'</b></div>'+
+      '<div class="row"><span>Score</span><b>'+(x.score??0)+'</b></div>'+
+      '<div class="row"><span>Памп 24г</span><b>'+(x.pump_pct_24h??'—')+'%</b></div>'+
+      '<div class="row"><span>Памп 6г</span><b>'+(x.pump_pct_6h??'—')+'%</b></div>'+
+      '<div class="row"><span>Обʼєм</span><b>'+(x.volume_ratio??'—')+'x</b></div>'+
+      '<div class="row"><span>Підтримка</span><b>'+(x.support_level??'—')+'</b></div>'+
+      '<div class="row"><span>Чекаємо</span><b>'+wa+'</b></div>'+
+      '<div class="muted" style="margin-top:8px">'+notes+'</div>'+tradePlanHtml(x)+
+      '</div>'
+    );
+  }
+
+  updateFilterButtons();
+}
+
+function filt(){
+  let q=el('q').value.toUpperCase().trim();
+  let it=all.slice();
+
+  if(f!=='ALL') it=it.filter(x=>x.phase===f);
+  if(q) it=it.filter(x=>(x.symbol||'').includes(q));
+
+  render(it);
+}
+
+async function load(){
+  if(!advisorKey()){
+    if(!ensureKeyPrompt())return;
+  }
+
+  try{
+    let r=await fetch('/api/advisor/pump-short',{cache:'no-store',headers:advisorHeaders()});
+    if(!r.ok){
+      let e={};
+      try{e=await r.json()}catch(_){}
+      localStorage.removeItem('advisor_key');
+      showDenied((e.message||('HTTP '+r.status))+' Натисніть «Змінити ключ» або оновіть сторінку й введіть ключ ще раз.');
+      return;
+    }
+
+    let d=await r.json();
+    el('api').textContent='API: онлайн';
+    el('api').className='pill ok';
+    el('upd').textContent='Оновлено: '+new Date().toLocaleTimeString('uk-UA');
+
+    let c=d.phase_counts||{};
+    el('s1').textContent=c.SHORT_CANDIDATE||0;
+    el('s2').textContent=c.BREAKDOWN_WATCH||0;
+    el('s3').textContent=c.DISTRIBUTION_WATCH||0;
+    el('s4').textContent=c.OVEREXTENDED||0;
+    el('s5').textContent=d.symbols_count||0;
+
+    let age=Date.now()/1000-(d.ts||0);
+    el('notice').classList.toggle('show',!d.ts||age>180||(d.symbols_count||0)===0);
+
+    all=d.important||d.items||[];
+    filt();
+  }catch(e){
+    el('api').textContent='API: недоступний';
+    el('api').className='pill bad';
+    el('notice').classList.add('show');
+  }
+}
+
+document.querySelectorAll('button[data-f]').forEach(b=>b.onclick=()=>{
+  f=b.dataset.f;
+  updateFilterButtons();
+  filt();
+});
+
+el('q').oninput=filt;
+addEventListener('resize',dev);
+
+if(ensureKeyPrompt()){
+  dev();
+  load();
+  setInterval(load,7000);
+  setInterval(dev,60000);
+}
 </script></body></html>
 <!-- 21m-g: Цей ключ вже привʼязаний до іншого пристрою. Вам потрібен окремий ключ — зверніться до адміністратора. -->

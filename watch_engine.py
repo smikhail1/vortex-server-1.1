@@ -56,6 +56,43 @@ def _vortex_confirm_watch_list(items):
     except Exception:
         return items
 
+
+def _vortex_price_trigger_state_21na(item):
+    try:
+        side = _vortex_safe_str(item.get("side")).upper()
+        price = _vortex_safe_float(item.get("price"), 0.0)
+        trigger = _vortex_safe_float(item.get("trigger_price"), 0.0)
+
+        crossed = False
+        distance_pct = 0.0
+
+        if price > 0 and trigger > 0:
+            distance_pct = (price - trigger) / price * 100.0
+            if side in {"LONG", "BUY"}:
+                crossed = price >= trigger
+            elif side == "SHORT":
+                crossed = price <= trigger
+
+        return {
+            "trigger_crossed": bool(crossed),
+            "price_vs_trigger_pct": round(distance_pct, 4),
+        }
+    except Exception:
+        return {
+            "trigger_crossed": False,
+            "price_vs_trigger_pct": 0.0,
+        }
+
+
+def _vortex_momentum_confirmed_21na(item):
+    try:
+        args = _vortex_safe_str(item.get("args_text")).lower()
+        setup = _vortex_safe_str(item.get("setup_type")).lower()
+        return "momentum" in setup and ("momentum_confirmed" in args or " | confirmed" in args)
+    except Exception:
+        return False
+
+
 @dataclass
 
 class WatchItem:
@@ -307,10 +344,16 @@ class WatchEngine:
         # Критичный фикс:
         # обычные сетапы в dead/chaotic/unknown блокируем,
         # но dead_override_momentum_* пропускаем к price confirmation.
-        if market_regime in {"dead", "chaotic", "unknown"} and not is_dead_override:
+        # 21n-b: "unknown" means missing regime data, not a hostile regime.
+        # Do not hard-block watch candidates only because market_regime is absent
+        # from ta_data. Keep blocking real hostile regimes: dead / chaotic.
+        if market_regime in {"dead", "chaotic"} and not is_dead_override:
             item.status = "blocked"
             item.confirmation_reason = f"bad regime during watch:{market_regime}"
             return None
+
+        if market_regime == "unknown" and not is_dead_override:
+            item.confirmation_reason = "regime data missing; confirmation uses price/EMA trigger only"
 
         buffer_abs = atr * self._buffer_for_market(item.market)
 
@@ -399,10 +442,50 @@ class WatchEngine:
 
         return out
 
-    def snapshot(self) -> List[Dict[str, Any]]:
+    def snapshot(self, ta_data: Optional[Dict[str, Dict[str, Any]]] = None, market: Optional[str] = None) -> List[Dict[str, Any]]:
         self.prune()
 
-        items = [self.to_public(item) for item in self._items.values()]
+        # 21n-c: read-only UI/API snapshot.
+        # IMPORTANT:
+        # - snapshot() must NOT call check_confirmation_for_item()
+        # - only confirmed_items() may mutate watch state and push candidates into decision-loop
+        # - UI may still see live trigger_crossed diagnostics from ta_data
+        items: List[Dict[str, Any]] = []
+
+        for item in self._items.values():
+            if market and item.market != safe_str(market).lower():
+                continue
+
+            data = self.to_public(item)
+
+            if isinstance(ta_data, dict):
+                current = ta_data.get(item.symbol) or {}
+                if current:
+                    live_price = safe_float(current.get("price"), 0.0)
+                    live_atr = safe_float(current.get("atr"), 0.0)
+                    if live_price > 0:
+                        data["price"] = round(live_price, 8)
+                    if live_atr > 0:
+                        data["atr"] = round(live_atr, 8)
+
+                    trigger_state = _vortex_price_trigger_state_21na(data)
+                    data.update(trigger_state)
+                    data["snapshot_live_price"] = live_price > 0
+                    data["snapshot_readonly"] = True
+
+                    # If old stored state says ready but current live price no longer crosses
+                    # trigger, do not present it as a current entry-confirmed signal.
+                    if not data.get("trigger_crossed"):
+                        data["entry_confirmed"] = False
+                        if safe_str(data.get("status")).lower() == "ready":
+                            data["confirmation_stage"] = "stale_ready_wait_reconfirm"
+                    elif data.get("entry_confirmed"):
+                        data["confirmation_stage"] = "entry_trigger"
+                    elif data.get("momentum_confirmed"):
+                        data["confirmation_stage"] = "trigger_crossed_not_ready"
+
+            items.append(data)
+
         rank = {
             "ready": 4,
             "watch": 3,
@@ -423,5 +506,31 @@ class WatchEngine:
     def to_public(self, item: WatchItem) -> Dict[str, Any]:
         now = time.time()
         data = asdict(item)
+
+        trigger_state = _vortex_price_trigger_state_21na(data)
+        data.update(trigger_state)
+
+        data["momentum_confirmed"] = _vortex_momentum_confirmed_21na(data)
+        data["entry_confirmed"] = (
+            bool(data.get("confirmed"))
+            and safe_str(data.get("status")).lower() == "ready"
+            and bool(data.get("trigger_crossed"))
+        )
+
+        reason_l = safe_str(data.get("confirmation_reason")).lower()
+        data["regime_missing"] = "regime data missing" in reason_l
+        data["regime_blocked"] = "bad regime during watch" in reason_l
+
+        if data["entry_confirmed"]:
+            data["confirmation_stage"] = "entry_trigger"
+            data["waiting_for"] = "entry safety / policy check"
+        elif data.get("trigger_crossed"):
+            data["confirmation_stage"] = "trigger_crossed_not_ready"
+        elif data.get("momentum_confirmed"):
+            data["confirmation_stage"] = "momentum_confirmed_wait_trigger"
+        else:
+            data["confirmation_stage"] = "watch"
+
         data["expires_in_sec"] = max(0, int(item.expires_at - now))
         return data
+

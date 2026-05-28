@@ -290,7 +290,10 @@ async def watchlist_loop(state, watchlist_builder, watch_engine, screener=None, 
                 screener,
             )
 
-            engine_items = watch_engine.snapshot()
+            try:
+                engine_items = watch_engine.snapshot(ta_data=ta_data)
+            except TypeError:
+                engine_items = watch_engine.snapshot()
 
             if engine_items:
                 items = engine_items
