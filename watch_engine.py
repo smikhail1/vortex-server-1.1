@@ -1,4 +1,5 @@
 import time
+from collections import Counter
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -324,6 +325,157 @@ class WatchEngine:
             if key.startswith(f"{sym}::{mkt}::"):
                 self._items.pop(key, None)
 
+
+    # ===== VORTEX 1.8.22-a confirmation audit =====
+    def evaluate_confirmation_state(self, item: WatchItem, current: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Read-only confirmation diagnostics.
+
+        IMPORTANT:
+        - Does NOT mutate WatchItem.
+        - Mirrors check_confirmation_for_item() conditions.
+        - Intended for /api/watchlist and decision-flow forensics.
+        """
+        now = time.time()
+        side = safe_str(getattr(item, "side", "")).upper()
+        market = safe_str(getattr(item, "market", "")).lower()
+        setup_type = safe_str(getattr(item, "setup_type", ""))
+        trigger = safe_float(getattr(item, "trigger_price", 0.0), 0.0)
+        invalidation = safe_float(getattr(item, "invalidation_price", 0.0), 0.0)
+        price = safe_float((current or {}).get("price"), safe_float(getattr(item, "price", 0.0), 0.0))
+        atr = safe_float((current or {}).get("atr"), safe_float(getattr(item, "atr", 0.0), 0.0))
+        ema20 = safe_float((current or {}).get("ema20"), 0.0)
+        market_regime = safe_str((current or {}).get("market_regime"), "unknown").lower()
+        breakout = safe_bool((current or {}).get("breakout"))
+        breakout_dir = safe_str((current or {}).get("breakout_dir")).lower()
+
+        buffer_atr = self._buffer_for_market(market)
+        buffer_abs = atr * buffer_atr if atr > 0 else 0.0
+        is_dead_override = self._is_dead_override(setup_type)
+        expired = self._is_expired(item, now)
+        regime_blocked = market_regime in {"dead", "chaotic"} and not is_dead_override
+        regime_missing = market_regime == "unknown"
+
+        trigger_crossed = False
+        price_ok = False
+        ema_ok = False
+        invalidated = False
+        breakout_ok = False
+        required_price = 0.0
+        invalidation_level = 0.0
+        price_vs_required_pct = 0.0
+        price_vs_trigger_pct = 0.0
+
+        if price > 0 and trigger > 0:
+            price_vs_trigger_pct = ((price - trigger) / price * 100.0) if price else 0.0
+
+        if side in {"LONG", "BUY"}:
+            required_price = trigger + buffer_abs if trigger > 0 else 0.0
+            invalidation_level = invalidation - buffer_abs if invalidation > 0 else 0.0
+            trigger_crossed = price > 0 and trigger > 0 and price >= trigger
+            price_ok = price > 0 and required_price > 0 and price >= required_price
+            ema_ok = ema20 <= 0 or price >= ema20 or is_dead_override
+            breakout_ok = bool(breakout and breakout_dir == "up")
+            invalidated = invalidation > 0 and price > 0 and price <= invalidation - buffer_abs
+        elif side == "SHORT":
+            required_price = trigger - buffer_abs if trigger > 0 else 0.0
+            invalidation_level = invalidation + buffer_abs if invalidation > 0 else 0.0
+            trigger_crossed = price > 0 and trigger > 0 and price <= trigger
+            price_ok = price > 0 and required_price > 0 and price <= required_price
+            ema_ok = ema20 <= 0 or price <= ema20 or is_dead_override
+            breakout_ok = bool(breakout and breakout_dir == "down")
+            invalidated = invalidation > 0 and price > 0 and price >= invalidation + buffer_abs
+        else:
+            reason = "unsupported_side"
+            return {
+                "schema": "vortex.confirm_check.v1",
+                "side": side,
+                "market": market,
+                "setup_type": setup_type,
+                "price": round(price, 8),
+                "trigger": round(trigger, 8),
+                "atr": round(atr, 8),
+                "buffer_atr": buffer_atr,
+                "buffer_abs": round(buffer_abs, 8),
+                "required_price": 0.0,
+                "ema20": round(ema20, 8),
+                "trigger_crossed": False,
+                "price_ok": False,
+                "ema_ok": False,
+                "breakout_ok": False,
+                "invalidated": False,
+                "would_confirm_now": False,
+                "reason": reason,
+                "market_regime": market_regime,
+                "regime_missing": regime_missing,
+                "regime_blocked": regime_blocked,
+                "expired": expired,
+            }
+
+        if price > 0 and required_price > 0:
+            price_vs_required_pct = ((price - required_price) / price * 100.0) if price else 0.0
+
+        would_confirm_now = (
+            not expired
+            and not regime_blocked
+            and not invalidated
+            and price > 0
+            and atr > 0
+            and (((price_ok and ema_ok) or breakout_ok))
+        )
+
+        if expired:
+            reason = "expired"
+        elif price <= 0 or atr <= 0:
+            reason = "missing_price_or_atr"
+        elif regime_blocked:
+            reason = "regime_blocked"
+        elif invalidated:
+            reason = "invalidated"
+        elif would_confirm_now:
+            reason = "would_confirm_now"
+        elif not trigger_crossed:
+            reason = "waiting_trigger"
+        elif not price_ok and not breakout_ok:
+            reason = "waiting_buffer"
+        elif not ema_ok and not breakout_ok:
+            reason = "ema_block"
+        else:
+            reason = "not_ready"
+
+        return {
+            "schema": "vortex.confirm_check.v1",
+            "side": side,
+            "market": market,
+            "setup_type": setup_type,
+            "price": round(price, 8),
+            "trigger": round(trigger, 8),
+            "atr": round(atr, 8),
+            "buffer_atr": buffer_atr,
+            "buffer_abs": round(buffer_abs, 8),
+            "required_price": round(required_price, 8),
+            "invalidation_price": round(invalidation, 8),
+            "invalidation_level": round(invalidation_level, 8),
+            "ema20": round(ema20, 8),
+            "market_regime": market_regime,
+            "trigger_crossed": bool(trigger_crossed),
+            "price_ok": bool(price_ok),
+            "ema_ok": bool(ema_ok),
+            "breakout_ok": bool(breakout_ok),
+            "breakout": bool(breakout),
+            "breakout_dir": breakout_dir,
+            "invalidated": bool(invalidated),
+            "would_confirm_now": bool(would_confirm_now),
+            "reason": reason,
+            "regime_missing": bool(regime_missing),
+            "regime_blocked": bool(regime_blocked),
+            "dead_override": bool(is_dead_override),
+            "expired": bool(expired),
+            "price_vs_trigger_pct": round(price_vs_trigger_pct, 4),
+            "price_vs_required_pct": round(price_vs_required_pct, 4),
+        }
+    # ===== END VORTEX 1.8.22-a confirmation audit =====
+
     def check_confirmation_for_item(self, item: WatchItem, current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if self._is_expired(item):
             item.status = "expired"
@@ -421,16 +573,27 @@ class WatchEngine:
         self.prune()
 
         out: List[Dict[str, Any]] = []
+        checked_count = 0
+        reason_counts = Counter()
+        would_confirm_but_not_returned = 0
 
         for item in list(self._items.values()):
             if market and item.market != safe_str(market).lower():
                 continue
 
             current = ta_data.get(item.symbol) or {}
+            audit = self.evaluate_confirmation_state(item, current)
+            checked_count += 1
+            reason_counts[safe_str(audit.get("reason"), "unknown")] += 1
+
             confirmed = self.check_confirmation_for_item(item, current)
 
             if confirmed:
+                confirmed["confirm_check"] = audit
                 out.append(confirmed)
+            elif audit.get("would_confirm_now"):
+                # Diagnostic only. If this grows, confirmation path/state timing must be investigated.
+                would_confirm_but_not_returned += 1
 
         out.sort(
             key=lambda x: (
@@ -439,6 +602,21 @@ class WatchEngine:
             ),
             reverse=True,
         )
+
+        try:
+            now = time.time()
+            last = safe_float(getattr(self, "_last_confirmation_audit_log_ts", 0.0), 0.0)
+            if self.logger and (now - last >= 60.0) and checked_count > 0:
+                self._last_confirmation_audit_log_ts = now
+                self.logger.info("WATCH", "confirmation audit", {
+                    "market": safe_str(market or "all"),
+                    "checked_count": checked_count,
+                    "confirmed_count": len(out),
+                    "would_confirm_but_not_returned": would_confirm_but_not_returned,
+                    "reason_counts": dict(reason_counts),
+                })
+        except Exception:
+            pass
 
         return out
 
@@ -472,6 +650,7 @@ class WatchEngine:
                     data.update(trigger_state)
                     data["snapshot_live_price"] = live_price > 0
                     data["snapshot_readonly"] = True
+                    data["confirm_check"] = self.evaluate_confirmation_state(item, current)
 
                     # If old stored state says ready but current live price no longer crosses
                     # trigger, do not present it as a current entry-confirmed signal.
@@ -520,6 +699,7 @@ class WatchEngine:
         reason_l = safe_str(data.get("confirmation_reason")).lower()
         data["regime_missing"] = "regime data missing" in reason_l
         data["regime_blocked"] = "bad regime during watch" in reason_l
+        data["confirm_check"] = None
 
         if data["entry_confirmed"]:
             data["confirmation_stage"] = "entry_trigger"

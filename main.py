@@ -64,6 +64,176 @@ def _enrich_ta_data_with_screener(ta_data, symbols, screener):
     return enriched
 
 
+# ===== VORTEX 1.8.22-b2 confirmation pickup audit =====
+def _vortex_confirm_audit_safe_float_1822b2(value, default=0.0):
+    try:
+        if value is None or value == "":
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _vortex_confirm_audit_snapshot_1822b2(watch_engine, ta_data):
+    """
+    Read-only comparison helper.
+    It intentionally calls snapshot(ta_data=...) and never mutates watch state.
+    """
+    from collections import Counter
+
+    try:
+        try:
+            rows = watch_engine.snapshot(ta_data=ta_data, market="fut")
+        except TypeError:
+            rows = watch_engine.snapshot()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc)[:220],
+            "fut_items": 0,
+            "trigger_crossed": 0,
+            "would": 0,
+            "reasons": {},
+            "symbols": [],
+            "engine_reasons": {},
+        }
+
+    fut = [x for x in (rows or []) if isinstance(x, dict) and safe_str(x.get("market")).lower() == "fut"]
+    reasons = Counter()
+    engine_reasons = Counter()
+    would_symbols = []
+    trigger_crossed = 0
+
+    for item in fut:
+        if item.get("trigger_crossed"):
+            trigger_crossed += 1
+
+        cc = item.get("confirm_check") if isinstance(item.get("confirm_check"), dict) else {}
+        reason = safe_str(cc.get("reason") or item.get("confirmation_stage") or "unknown")
+        reasons[reason] += 1
+
+        if cc.get("would_confirm_now"):
+            would_symbols.append(safe_str(item.get("symbol")).upper())
+
+    return {
+        "ok": True,
+        "error": "",
+        "fut_items": len(fut),
+        "trigger_crossed": trigger_crossed,
+        "would": len(would_symbols),
+        "reasons": dict(reasons),
+        "symbols": would_symbols[:20],
+        "engine_reasons": dict(engine_reasons),
+    }
+
+
+def _vortex_confirm_audit_engine_compare_1822b2(confirmation_engine, watch_engine, ta_data):
+    """
+    Compare ConfirmationEngine decisions on the same read-only snapshot rows.
+    This does NOT call confirmed_futures_items() and does NOT update WatchEngine.
+    """
+    from collections import Counter
+
+    out = {
+        "engine_confirmed": 0,
+        "engine_reasons": {},
+        "engine_symbols": [],
+        "error": "",
+    }
+    try:
+        try:
+            rows = watch_engine.snapshot(ta_data=ta_data, market="fut")
+        except TypeError:
+            rows = watch_engine.snapshot()
+
+        fut = [x for x in (rows or []) if isinstance(x, dict) and safe_str(x.get("market")).lower() == "fut"]
+        reasons = Counter()
+        symbols = []
+
+        futures_engine = getattr(confirmation_engine, "futures", None)
+        if futures_engine is None or not hasattr(futures_engine, "confirm"):
+            out["error"] = "confirmation_engine.futures.confirm unavailable"
+            return out
+
+        for item in fut:
+            sym = safe_str(item.get("symbol")).upper()
+            try:
+                decision = futures_engine.confirm(item, (ta_data or {}).get(sym, {}) or {})
+                reason = safe_str(getattr(decision, "reason", "unknown"))
+                reasons[reason] += 1
+                if bool(getattr(decision, "confirmed", False)):
+                    symbols.append(sym)
+            except Exception as exc:
+                reasons[f"engine_error:{str(exc)[:80]}"] += 1
+
+        out["engine_confirmed"] = len(symbols)
+        out["engine_reasons"] = dict(reasons)
+        out["engine_symbols"] = symbols[:20]
+        return out
+    except Exception as exc:
+        out["error"] = str(exc)[:220]
+        return out
+
+
+async def _vortex_confirm_pickup_audit_1822b2(
+    *,
+    state,
+    confirmation_engine,
+    watch_engine,
+    ta_data,
+    confirmed_fut_items,
+):
+    """
+    Log the mismatch between WatchEngine read-only confirm_check and the real
+    ConfirmationEngine pickup path. Trading behavior is untouched.
+    """
+    try:
+        now = time.time()
+        pre = _vortex_confirm_audit_snapshot_1822b2(watch_engine, ta_data)
+        cmp = _vortex_confirm_audit_engine_compare_1822b2(confirmation_engine, watch_engine, ta_data)
+        returned = [safe_str(x.get("symbol")).upper() for x in (confirmed_fut_items or []) if isinstance(x, dict)]
+
+        important = bool(pre.get("would", 0) > 0 or cmp.get("engine_confirmed", 0) > 0 or returned)
+        last_ts = float(getattr(_vortex_confirm_pickup_audit_1822b2, "_last_ts", 0.0) or 0.0)
+        throttle_sec = 60.0
+        if (not important) and (now - last_ts < throttle_sec):
+            return
+        if important or (now - last_ts >= throttle_sec):
+            _vortex_confirm_pickup_audit_1822b2._last_ts = now
+
+        pre_msg = (
+            f"pre confirmed pickup | fut_items={pre.get('fut_items')} "
+            f"trigger_crossed={pre.get('trigger_crossed')} would={pre.get('would')} "
+            f"reasons={pre.get('reasons')} symbols={pre.get('symbols')}"
+        )
+        await state.add_sys_log("🧪 [CONFIRM AUDIT]", pre_msg)
+
+        cmp_msg = (
+            f"engine compare | engine_confirmed={cmp.get('engine_confirmed')} "
+            f"engine_reasons={cmp.get('engine_reasons')} "
+            f"engine_symbols={cmp.get('engine_symbols')} error={cmp.get('error','')}"
+        )
+        await state.add_sys_log("🧪 [CONFIRM AUDIT]", cmp_msg)
+
+        post_msg = (
+            f"post confirmed pickup | returned={len(returned)} "
+            f"pre_would={pre.get('would')} returned_symbols={returned[:20]}"
+        )
+        await state.add_sys_log("🧪 [CONFIRM AUDIT]", post_msg)
+
+        if pre.get("would", 0) > 0 and not returned:
+            await state.add_sys_log(
+                "🧪 [CONFIRM AUDIT]",
+                "pickup mismatch | reason=watch_engine_would_but_confirmation_engine_returned_none",
+            )
+    except Exception as exc:
+        try:
+            await state.add_sys_log("🧪 [CONFIRM AUDIT]", f"audit failed | {str(exc)[:220]}")
+        except Exception:
+            pass
+# ===== END VORTEX 1.8.22-b2 confirmation pickup audit =====
+
+
 async def pool_loop(state, screener, logger=None) -> None:
     next_rotation = time.time()
 
@@ -461,6 +631,35 @@ async def strategy_loop(
                             })
                         continue
 
+                    # VORTEX v1.8.22-e-r2:
+                    # Do not recreate a futures candidate right after confirmed entry reject.
+                    try:
+                        _reject_cd = getattr(strategy_loop, "_reject_cooldown_until", {})
+                        _reject_log = getattr(strategy_loop, "_reject_cooldown_log_ts", {})
+                        _reject_key = f"{sym}::fut"
+                        _now = time.time()
+                        _until = float(_reject_cd.get(_reject_key, 0.0) or 0.0)
+
+                        if _until > _now:
+                            _last_log = float(_reject_log.get(_reject_key, 0.0) or 0.0)
+                            if _now - _last_log >= 120.0:
+                                await state.add_sys_log(
+                                    "🧊 [FUT WATCH]",
+                                    f"{sym} skipped by reject cooldown | remain={int(_until - _now)}s",
+                                )
+                                if logger:
+                                    logger.info("WATCH", "futures candidate skipped by reject cooldown", {
+                                        "symbol": sym,
+                                        "remain_sec": int(_until - _now),
+                                        "setup_type": analysis.get("setup_type"),
+                                        "score": analysis.get("score"),
+                                    })
+                                _reject_log[_reject_key] = _now
+                                strategy_loop._reject_cooldown_log_ts = _reject_log
+                            continue
+                    except Exception:
+                        pass
+
                     item = watch_engine.upsert_from_analysis(
                         symbol=sym,
                         market="fut",
@@ -495,7 +694,15 @@ async def strategy_loop(
                 current_fut_open_count = 1 if router.get_futures_position() is not None else 0
 
             if current_fut_open_count < risk_status["max_open_futures_positions"]:
-                for item in confirmation_engine.confirmed_futures_items(watch_engine, ta_data):
+                confirmed_fut_items = watch_engine.confirmed_items(ta_data, market="fut")
+                await _vortex_confirm_pickup_audit_1822b2(
+                    state=state,
+                    confirmation_engine=confirmation_engine,
+                    watch_engine=watch_engine,
+                    ta_data=ta_data,
+                    confirmed_fut_items=confirmed_fut_items,
+                )
+                for item in confirmed_fut_items:
                     sym = safe_str(item.get("symbol")).upper()
                     current = ta_data.get(sym)
 
@@ -836,9 +1043,43 @@ async def strategy_loop(
 
                     else:
                         await state.add_sys_log("⚠️ [FUT OPEN_REJECT]", f"{sym} rejected | {result}")
+
+                        # VORTEX v1.8.22-d:
+                        # A confirmed futures candidate that reached execution/policy reject
+                        # must not be retried every strategy tick. Remove it from WATCH.
+                        try:
+                            watch_engine.remove(sym, "fut", side)
+
+                            _reject_code = safe_str(result.get("code"))
+                            if _reject_code == "MAX_FUTURES_POSITIONS_REACHED":
+                                _reject_cd_sec = 60.0
+                            elif _reject_code in {"BLOCK_ENTRY_SAFETY_POLICY", "LOCKED_BLOCKED"}:
+                                _reject_cd_sec = 1800.0
+                            else:
+                                _reject_cd_sec = 300.0
+
+                            _reject_cd = getattr(strategy_loop, "_reject_cooldown_until", {})
+                            _reject_key = f"{sym}::fut"
+                            _reject_cd[_reject_key] = time.time() + _reject_cd_sec
+                            strategy_loop._reject_cooldown_until = _reject_cd
+
+                            await state.add_sys_log(
+                                "🧯 [FUT WATCH]",
+                                f"{sym} removed after rejected confirmed entry | code={_reject_code} cooldown={int(_reject_cd_sec)}s",
+                            )
+                        except Exception as exc:
+                            if logger:
+                                logger.warning("WATCH", "reject cleanup remove failed", {
+                                    "symbol": sym,
+                                    "side": side,
+                                    "result": result,
+                                    "error": str(exc),
+                                })
+
                         if logger:
                             logger.warning("STRATEGY", "futures open rejected", {
                                 "symbol": sym,
+                                "side": side,
                                 "result": result,
                             })
 
