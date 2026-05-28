@@ -184,8 +184,8 @@ async def _vortex_confirm_pickup_audit_1822b2(
     confirmed_fut_items,
 ):
     """
-    Log the mismatch between WatchEngine read-only confirm_check and the real
-    ConfirmationEngine pickup path. Trading behavior is untouched.
+    Log the mismatch between WatchEngine read-only confirm_check and the actual
+    WatchEngine.confirmed_items() pickup. Trading behavior is untouched.
     """
     try:
         now = time.time()
@@ -202,14 +202,14 @@ async def _vortex_confirm_pickup_audit_1822b2(
             _vortex_confirm_pickup_audit_1822b2._last_ts = now
 
         pre_msg = (
-            f"pre confirmed pickup | fut_items={pre.get('fut_items')} "
+            f"pickup audit snapshot | fut_items={pre.get('fut_items')} "
             f"trigger_crossed={pre.get('trigger_crossed')} would={pre.get('would')} "
             f"reasons={pre.get('reasons')} symbols={pre.get('symbols')}"
         )
         await state.add_sys_log("🧪 [CONFIRM AUDIT]", pre_msg)
 
         cmp_msg = (
-            f"engine compare | engine_confirmed={cmp.get('engine_confirmed')} "
+            f"legacy engine compare | engine_confirmed={cmp.get('engine_confirmed')} "
             f"engine_reasons={cmp.get('engine_reasons')} "
             f"engine_symbols={cmp.get('engine_symbols')} error={cmp.get('error','')}"
         )
@@ -224,7 +224,7 @@ async def _vortex_confirm_pickup_audit_1822b2(
         if pre.get("would", 0) > 0 and not returned:
             await state.add_sys_log(
                 "🧪 [CONFIRM AUDIT]",
-                "pickup mismatch | reason=watch_engine_would_but_confirmation_engine_returned_none",
+                "pickup mismatch | reason=watch_engine_would_but_confirmed_items_returned_none",
             )
     except Exception as exc:
         try:
