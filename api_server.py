@@ -91,6 +91,8 @@ class APIServer:
             self.app.router.add_get("/api/intelligence", self.handle_intelligence),
             self.app.router.add_get("/api/context-fusion", self.handle_context_fusion),
             self.app.router.add_get("/api/macro-regime", self.handle_macro_regime),
+            self.app.router.add_get("/api/analytics/market-pulse", self.handle_market_pulse_1824b),
+            self.app.router.add_get("/analytics/market", self.handle_market_analytics_page_1824b),
             self.app.router.add_get("/api/advisor/pump-short", self.handle_pump_short_advisor),
             self.app.router.add_get("/advisor/pump-short", self.handle_pump_short_advisor_page),
             self.app.router.add_post("/api/advisor/device-report", self.handle_advisor_device_report),
@@ -211,22 +213,43 @@ class APIServer:
 
 
     def _advisor_fingerprint_21mg(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        VORTEX v1.8.23-b2:
+        Stable advisor fingerprint.
+
+        Binding must not depend on screen/mode/type/touch/X-Advisor-Device,
+        because device-report and pump-short can send different values.
+
+        For this read-only advisor:
+        - one access key is already dedicated to one device;
+        - userAgent is stable enough between device-report and pump-short;
+        - screen/mode/type remain useful for logs only.
+        """
         import hashlib as _hashlib
 
         payload = payload if isinstance(payload, dict) else {}
 
-        fp_source = {
-            "type": safe_str(payload.get("type"), ""),
-            "mode": safe_str(payload.get("mode"), ""),
-            "dpr": safe_str(payload.get("dpr"), ""),
-            "touch": bool(payload.get("touch")),
-            "userAgent": safe_str(payload.get("userAgent"), "")[:260],
+        ua = safe_str(payload.get("userAgent"), "")[:260]
+
+        stable_source = {
+            "userAgent": ua,
         }
 
-        raw = json.dumps(fp_source, ensure_ascii=False, sort_keys=True)
+        if not ua:
+            return {
+                "hash": "",
+                "source": stable_source,
+                "screen": {
+                    "width": safe_int(payload.get("width"), 0),
+                    "height": safe_int(payload.get("height"), 0),
+                },
+            }
+
+        raw = json.dumps(stable_source, ensure_ascii=False, sort_keys=True)
+
         return {
             "hash": _hashlib.sha256(raw.encode("utf-8")).hexdigest(),
-            "source": fp_source,
+            "source": stable_source,
             "screen": {
                 "width": safe_int(payload.get("width"), 0),
                 "height": safe_int(payload.get("height"), 0),
@@ -284,6 +307,7 @@ class APIServer:
             return auth
 
         raw_key = safe_str(auth.get("key"), "").strip()
+        key_hash = safe_str(auth.get("key_hash"), "").strip() or self._advisor_key_hash_1823a(raw_key)
         if not raw_key:
             auth["allowed"] = False
             auth["reason"] = "missing_key"
@@ -302,10 +326,10 @@ class APIServer:
             data["bindings"] = bindings
 
         now = int(_time.time())
-        existing = bindings.get(raw_key)
+        existing = bindings.get(key_hash)
 
         if not existing:
-            bindings[raw_key] = {
+            bindings[key_hash] = {
                 "key_label": safe_str(auth.get("label"), ""),
                 "fingerprint": fp.get("hash"),
                 "fingerprint_source": fp.get("source"),
@@ -347,7 +371,7 @@ class APIServer:
             "touch": bool(payload.get("touch")),
             "userAgent": safe_str(payload.get("userAgent"), "")[:260],
         }
-        bindings[raw_key] = existing
+        bindings[key_hash] = existing
         self._save_advisor_device_bindings_21mg(data)
 
         auth["binding"] = "matched"
@@ -369,28 +393,80 @@ class APIServer:
         except Exception as exc:
             return {"available": False, "keys": [], "error": f"read_failed: {safe_str(exc)}"}
 
+    def _advisor_key_hash_1823a(self, raw_key: str) -> str:
+        # v1.8.23-a advisor auth hardening: never use raw advisor keys as device-binding ids.
+        import hashlib as _hashlib
+        return _hashlib.sha256(safe_str(raw_key, "").strip().encode("utf-8")).hexdigest()
+
+    def _advisor_device_payload_from_request_1823a(self, request: web.Request) -> Dict[str, Any]:
+        return {
+            "device": safe_str(request.headers.get("X-Advisor-Device"), ""),
+            "type": safe_str(request.headers.get("X-Advisor-Type"), ""),
+            "mode": safe_str(request.headers.get("X-Advisor-Mode"), ""),
+            "width": safe_int(request.headers.get("X-Advisor-Screen-W"), 0),
+            "height": safe_int(request.headers.get("X-Advisor-Screen-H"), 0),
+            "screen": safe_str(request.headers.get("X-Advisor-Screen"), ""),
+            "dpr": safe_float(request.headers.get("X-Advisor-Dpr"), 1.0),
+            "touch": safe_str(request.headers.get("X-Advisor-Touch"), "").lower() in {"1", "true", "yes", "y"},
+            "userAgent": safe_str(request.headers.get("User-Agent"), "")[:260],
+        }
+
+    def _advisor_security_headers_1823a(self, html: bool = False) -> Dict[str, str]:
+        headers = {
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if html:
+            headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "connect-src 'self'; "
+                "img-src 'self' data:; "
+                "base-uri 'none'; "
+                "form-action 'none'; "
+                "frame-ancestors 'none'"
+            )
+        return headers
+
+    def _advisor_json_response_1823a(self, payload: Dict[str, Any], status: int = 200) -> web.Response:
+        return web.json_response(payload, status=status, headers=self._advisor_security_headers_1823a(False))
+
     def _advisor_auth_from_request_21md(self, request: web.Request) -> Dict[str, Any]:
-        raw_key = safe_str(request.query.get("key"), "").strip()
+        keys_data = self._load_advisor_access_keys_21md()
+        if "key" in request.query:
+            return {
+                "allowed": False,
+                "reason": "query_key_disabled",
+                "key": "",
+                "key_hash": "",
+                "label": "",
+                "keys_available": keys_data.get("available"),
+                "keys_error": keys_data.get("error"),
+            }
+
+        raw_key = ""
+        auth = safe_str(request.headers.get("Authorization"), "").strip()
+        if auth.lower().startswith("bearer "):
+            raw_key = auth[7:].strip()
         if not raw_key:
             raw_key = safe_str(request.headers.get("X-Advisor-Key"), "").strip()
-        if not raw_key:
-            auth = safe_str(request.headers.get("Authorization"), "").strip()
-            if auth.lower().startswith("bearer "):
-                raw_key = auth[7:].strip()
 
-        keys_data = self._load_advisor_access_keys_21md()
         if not raw_key:
-            return {"allowed": False, "reason": "missing_key", "key": "", "label": "", "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
+            return {"allowed": False, "reason": "missing_key", "key": "", "key_hash": "", "label": "", "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
 
+        key_hash = self._advisor_key_hash_1823a(raw_key)
         for item in keys_data.get("keys") or []:
             if not isinstance(item, dict):
                 continue
             if safe_str(item.get("key"), "").strip() == raw_key:
                 if item.get("enabled", True) is False:
-                    return {"allowed": False, "reason": "disabled_key", "key": raw_key, "label": safe_str(item.get("label"), ""), "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
-                return {"allowed": True, "reason": "allowed", "key": raw_key, "label": safe_str(item.get("label"), "Device"), "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
+                    return {"allowed": False, "reason": "disabled_key", "key": raw_key, "key_hash": key_hash, "label": safe_str(item.get("label"), ""), "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
+                return {"allowed": True, "reason": "allowed", "key": raw_key, "key_hash": key_hash, "label": safe_str(item.get("label"), "Device"), "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
 
-        return {"allowed": False, "reason": "bad_key", "key": raw_key, "label": "", "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
+        return {"allowed": False, "reason": "bad_key", "key": raw_key, "key_hash": key_hash, "label": "", "keys_available": keys_data.get("available"), "keys_error": keys_data.get("error")}
 
     def _advisor_client_ip_21md(self, request: web.Request) -> str:
         forwarded = safe_str(request.headers.get("X-Forwarded-For"), "")
@@ -402,9 +478,11 @@ class APIServer:
         reason = auth.get("reason")
         if reason == "device_mismatch":
             message = "Цей ключ вже привʼязаний до іншого пристрою. Вам потрібен окремий ключ — зверніться до адміністратора."
+        elif reason == "query_key_disabled":
+            message = "Ключ у URL вимкнено. Введіть ключ на сторінці або використовуйте Authorization: Bearer."
         else:
             message = "Доступ заборонено. Немає дійсного ключа пристрою."
-        return web.json_response({
+        return self._advisor_json_response_1823a({
             "ok": False,
             "available": False,
             "error": "advisor_access_denied",
@@ -677,18 +755,21 @@ class APIServer:
         return web.json_response(self._read_macro_regime_payload())
 
     async def handle_pump_short_advisor(self, request: web.Request) -> web.Response:
+        payload = self._advisor_device_payload_from_request_1823a(request)
         auth = self._advisor_auth_from_request_21md(request)
+        auth = self._check_or_bind_advisor_device_21mg(auth, payload)
+        self._log_advisor_access_21md(request, auth, payload)
         if not auth.get("allowed"):
-            self._log_advisor_access_21md(request, auth, {})
             return self._advisor_access_response_21md(auth)
-        return web.json_response(self._read_pump_short_advisor_payload())
+        return self._advisor_json_response_1823a(self._read_pump_short_advisor_payload())
 
     async def handle_pump_short_advisor_page(self, request: web.Request) -> web.Response:
         from pathlib import Path as _Path
+        headers = self._advisor_security_headers_1823a(html=True)
         path = _Path("web/pump_short_advisor.html")
         if not path.exists():
-            return web.Response(text="<html><body><h1>Радник після пампу</h1><p>HTML-файл не знайдено.</p></body></html>", content_type="text/html", charset="utf-8")
-        return web.Response(text=path.read_text(encoding="utf-8"), content_type="text/html", charset="utf-8")
+            return web.Response(text="<html><body><h1>Радник після пампу</h1><p>HTML-файл не знайдено.</p></body></html>", content_type="text/html", charset="utf-8", headers=headers)
+        return web.Response(text=path.read_text(encoding="utf-8"), content_type="text/html", charset="utf-8", headers=headers)
 
     async def handle_advisor_device_report(self, request: web.Request) -> web.Response:
         try:
@@ -707,7 +788,7 @@ class APIServer:
 
         payload["access_label"] = auth.get("label")
         data = self._write_advisor_device_report(payload)
-        return web.json_response({
+        return self._advisor_json_response_1823a({
             "ok": True,
             "access": {
                 "allowed": True,
@@ -722,14 +803,276 @@ class APIServer:
         if not auth.get("allowed"):
             self._log_advisor_access_21md(request, auth, {})
             return self._advisor_access_response_21md(auth)
-        return web.json_response(self._read_advisor_device_report_latest())
+        return self._advisor_json_response_1823a(self._read_advisor_device_report_latest())
 
     async def handle_advisor_access_latest(self, request: web.Request) -> web.Response:
         auth = self._advisor_auth_from_request_21md(request)
         if not auth.get("allowed"):
             self._log_advisor_access_21md(request, auth, {})
             return self._advisor_access_response_21md(auth)
-        return web.json_response(self._read_advisor_access_latest_21md())
+        return self._advisor_json_response_1823a(self._read_advisor_access_latest_21md())
+
+    # --- VORTEX v1.8.24-b MARKET ANALYTICS PAGE ---
+    def _market_pulse_count_1824b(self, items: List[Dict[str, Any]], key: str) -> Dict[str, int]:
+        from collections import Counter
+
+        values = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            value = safe_str(item.get(key), "").strip()
+            if value:
+                values.append(value)
+        return dict(Counter(values))
+
+    def _market_pulse_watch_summary_1824b(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        from collections import Counter
+
+        rows = [x for x in (items or []) if isinstance(x, dict)]
+        reasons = Counter()
+        trigger_crossed = 0
+        would_confirm_now = 0
+        entry_confirmed = 0
+        invalidated = 0
+
+        for item in rows:
+            check = item.get("confirm_check") if isinstance(item.get("confirm_check"), dict) else {}
+            reason = safe_str(check.get("reason") or item.get("confirmation_reason"), "").strip()
+            if reason:
+                reasons[reason] += 1
+
+            crossed = bool(item.get("trigger_crossed") or check.get("trigger_crossed"))
+            would = bool(check.get("would_confirm_now")) or reason == "would_confirm_now"
+            confirmed = bool(item.get("entry_confirmed") or item.get("confirmed"))
+            is_invalid = bool(check.get("invalidated")) or reason == "invalidated"
+
+            trigger_crossed += int(crossed)
+            would_confirm_now += int(would)
+            entry_confirmed += int(confirmed)
+            invalidated += int(is_invalid)
+
+        return {
+            "len": len(rows),
+            "status_counts": self._market_pulse_count_1824b(rows, "status"),
+            "stage_counts": self._market_pulse_count_1824b(rows, "confirmation_stage"),
+            "setup_types": self._market_pulse_count_1824b(rows, "setup_type"),
+            "sides": self._market_pulse_count_1824b(rows, "side"),
+            "trigger_crossed": trigger_crossed,
+            "would_confirm_now": would_confirm_now,
+            "entry_confirmed": entry_confirmed,
+            "invalidated": invalidated,
+            "confirm_reasons": dict(reasons),
+        }
+
+    def _market_pulse_near_entries_1824b(self, items: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+        out = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+
+            check = item.get("confirm_check") if isinstance(item.get("confirm_check"), dict) else {}
+            price = safe_float(item.get("price") or item.get("current_price"), 0.0)
+            trigger = safe_float(
+                check.get("required_price")
+                or item.get("required_price")
+                or item.get("trigger_price")
+                or item.get("trigger"),
+                0.0,
+            )
+            if price <= 0 or trigger <= 0:
+                continue
+
+            reason = safe_str(check.get("reason") or item.get("confirmation_reason"), "")
+            would = bool(check.get("would_confirm_now")) or reason == "would_confirm_now"
+            out.append({
+                "symbol": safe_str(item.get("symbol"), "").upper(),
+                "market": safe_str(item.get("market"), "").lower(),
+                "side": safe_str(item.get("side"), "").upper(),
+                "setup_type": safe_str(item.get("setup_type"), ""),
+                "score": safe_int(item.get("score"), 0),
+                "price": price,
+                "trigger": trigger,
+                "dist_pct": round(((price - trigger) / trigger) * 100.0, 4),
+                "reason": reason or "waiting_trigger",
+                "stage": safe_str(item.get("confirmation_stage"), ""),
+                "trigger_crossed": bool(item.get("trigger_crossed") or check.get("trigger_crossed")),
+                "would_confirm_now": would,
+                "invalidated": bool(check.get("invalidated")) or reason == "invalidated",
+            })
+
+        out.sort(key=lambda x: (not bool(x.get("would_confirm_now")), abs(safe_float(x.get("dist_pct"), 9999.0))))
+        return out[:max(0, int(limit))]
+
+    def _market_pulse_context_fusion_1824b(self, fusion: Dict[str, Any]) -> Dict[str, Any]:
+        fusion = fusion if isinstance(fusion, dict) else {}
+        summary = fusion.get("summary") if isinstance(fusion.get("summary"), dict) else {}
+        ichi = summary.get("ichimoku_summary") if isinstance(summary.get("ichimoku_summary"), dict) else {}
+        cloud = ichi.get("cloud_state_counts") if isinstance(ichi.get("cloud_state_counts"), dict) else {}
+        long_support = ichi.get("long_support_counts") if isinstance(ichi.get("long_support_counts"), dict) else {}
+        short_support = ichi.get("short_support_counts") if isinstance(ichi.get("short_support_counts"), dict) else {}
+
+        return {
+            "available": bool(fusion.get("available")),
+            "heatmap_bias": summary.get("heatmap_bias"),
+            "heatmap_net_bias_score": safe_float(summary.get("heatmap_net_bias_score"), 0.0),
+            "final_view_counts": summary.get("final_view_counts") if isinstance(summary.get("final_view_counts"), dict) else {},
+            "ichimoku": {
+                "above_cloud": safe_int(cloud.get("above_cloud"), 0),
+                "below_cloud": safe_int(cloud.get("below_cloud"), 0),
+                "inside_cloud": safe_int(cloud.get("inside_cloud"), 0),
+                "long_supportive": safe_int(long_support.get("supportive"), 0),
+                "long_against": safe_int(long_support.get("against"), 0),
+                "short_supportive": safe_int(short_support.get("supportive"), 0),
+                "short_against": safe_int(short_support.get("against"), 0),
+            },
+        }
+
+    def _market_pulse_regime_1824b(self, macro: Dict[str, Any]) -> Dict[str, Any]:
+        macro = macro if isinstance(macro, dict) else {}
+        recommendation = macro.get("recommendation") if isinstance(macro.get("recommendation"), dict) else {}
+        return {
+            "available": bool(macro.get("available")),
+            "regime": macro.get("regime"),
+            "confidence": safe_int(macro.get("confidence"), 0),
+            "risk_mode": recommendation.get("risk_mode"),
+            "long_permission": recommendation.get("long_permission"),
+            "short_permission": recommendation.get("short_permission"),
+            "reasons": macro.get("reasons") if isinstance(macro.get("reasons"), list) else [],
+            "warnings": macro.get("warnings") if isinstance(macro.get("warnings"), list) else [],
+            "heatmap": macro.get("heatmap") if isinstance(macro.get("heatmap"), dict) else {},
+            "ichimoku_breadth": macro.get("ichimoku_breadth") if isinstance(macro.get("ichimoku_breadth"), dict) else {},
+            "futures_pressure": macro.get("futures_pressure") if isinstance(macro.get("futures_pressure"), dict) else {},
+            "vortex_pressure": macro.get("vortex_pressure") if isinstance(macro.get("vortex_pressure"), dict) else {},
+        }
+
+    def _market_pulse_pump_1824b(self, pump: Dict[str, Any]) -> Dict[str, Any]:
+        pump = pump if isinstance(pump, dict) else {}
+        if not pump.get("available"):
+            return {"available": False, "reason": pump.get("error") or "no_runtime_file"}
+
+        items = pump.get("items") if isinstance(pump.get("items"), list) else []
+        important = pump.get("important") if isinstance(pump.get("important"), list) else []
+        fields = (
+            "symbol", "phase", "score", "pump_pct_24h", "pump_pct_6h", "rsi14",
+            "volume_ratio", "breakdown_distance_pct", "waiting_for", "context_4h",
+        )
+        return {
+            "available": True,
+            "symbols_count": safe_int(pump.get("symbols_count"), len(items)),
+            "items_len": len(items),
+            "important_len": len(important),
+            "phase_counts": pump.get("phase_counts") if isinstance(pump.get("phase_counts"), dict) else {},
+            "top_important": [
+                {field: item.get(field) for field in fields}
+                for item in important[:15]
+                if isinstance(item, dict)
+            ],
+        }
+
+    def _market_pulse_human_summary_1824b(
+        self,
+        regime: Dict[str, Any],
+        futures_summary: Dict[str, Any],
+        near_futures: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        value = safe_str(regime.get("regime"), "mixed_neutral").lower()
+        ready = safe_int(futures_summary.get("would_confirm_now"), 0)
+        invalidated = safe_int(futures_summary.get("invalidated"), 0)
+
+        if "risk_off" in value or "bear" in value:
+            title = "Осторожный рынок с медвежьим уклоном"
+            main_text = "Рынок сейчас находится в защитном режиме. LONG-сделки снижены, SHORT разрешён выборочно. Кандидаты оцениваются строго, без форсирования входов."
+        elif "risk_on" in value or "bull" in value:
+            title = "Рынок в режиме risk-on"
+            main_text = "Фон поддерживает активный отбор. LONG-сценарии получают больше поддержки, но каждый вход всё равно должен пройти подтверждение и защитные фильтры."
+        else:
+            title = "Смешанный рынок без чёткого преимущества"
+            main_text = "Рынок неоднородный: часть монет поддерживает LONG, часть SHORT. VORTEX ждёт более ясного подтверждения перед входом."
+
+        if ready > 0:
+            why = f"Есть кандидаты, готовые к decision-loop: {ready}. Нужно проверить события confirmed -> decision и итог open/reject."
+            recommendation = "Следить за decision-loop. Не форсировать вход вручную."
+        else:
+            why = f"Готовых futures-входов сейчас нет: would_confirm_now = 0. Кандидаты ждут trigger или buffer; invalidated: {invalidated}. Это режим ожидания подтверждения, а не ошибка."
+            recommendation = "Ждать подтверждения. Не форсировать входы."
+
+        return {
+            "title": title,
+            "status": value,
+            "main_text": main_text,
+            "why_no_trade": why,
+            "what_to_watch": [safe_str(x.get("symbol"), "") for x in near_futures[:5] if x.get("symbol")],
+            "recommendation": recommendation,
+        }
+
+    async def _build_market_pulse_payload_1824b(self) -> Dict[str, Any]:
+        dashboard = await self._build_dashboard_payload()
+        health = await self.state.get_health_state(mode=self.mode)
+        health = health if isinstance(health, dict) else {}
+
+        now_ts = time.time()
+        uptime_sec = int(max(0, now_ts - SERVER_STARTED_AT))
+        health_out = {
+            "status": health.get("status"),
+            "mode": health.get("mode") or self.mode,
+            "uptime": _format_uptime_human_21li(uptime_sec),
+            "market_age_sec": safe_float(health.get("market_age_sec"), 9999.0),
+            "ta_age_sec": safe_float(health.get("ta_age_sec"), 9999.0),
+        }
+        health_out["fresh"] = health_out["market_age_sec"] <= 10.0 and health_out["ta_age_sec"] <= 15.0
+
+        raw_items = dashboard.get("terminal", {}).get("watchlist_mini", []) or []
+        items = self._dedupe_watchlist_items(raw_items)
+        futures = [x for x in items if safe_str(x.get("market"), "").lower() == "fut"]
+        spot = [x for x in items if safe_str(x.get("market"), "").lower() == "spot"]
+        futures_summary = self._market_pulse_watch_summary_1824b(futures)
+        spot_summary = self._market_pulse_watch_summary_1824b(spot)
+        near_futures = self._market_pulse_near_entries_1824b(futures, 15)
+        near_spot = self._market_pulse_near_entries_1824b(spot, 10)
+
+        macro = dashboard.get("macro_regime") if isinstance(dashboard.get("macro_regime"), dict) else self._read_macro_regime_payload()
+        regime = self._market_pulse_regime_1824b(macro)
+        fusion = self._market_pulse_context_fusion_1824b(dashboard.get("context_fusion") or {})
+        risk = self.risk_manager.get_status() if self.risk_manager else {}
+        risk = risk if isinstance(risk, dict) else {}
+
+        return {
+            "ok": True,
+            "schema": "vortex.market_pulse.api.v1",
+            "schema_version": "1.8.24-b",
+            "ts": now_ts,
+            "health": health_out,
+            "portfolio": dashboard.get("portfolio") if isinstance(dashboard.get("portfolio"), dict) else {},
+            "positions": dashboard.get("positions") if isinstance(dashboard.get("positions"), dict) else {"fut": {}, "spot": {}},
+            "risk": risk,
+            "market_regime": regime,
+            "context_fusion": fusion,
+            "watchlist": {"futures": futures_summary, "spot": spot_summary},
+            "near_entries": {"futures": near_futures, "spot": near_spot},
+            "pump_advisor": self._market_pulse_pump_1824b(self._read_pump_short_advisor_payload()),
+            "recent_events": {"available": False, "reason": "not_implemented_in_api"},
+            "human_summary": self._market_pulse_human_summary_1824b(regime, futures_summary, near_futures),
+        }
+
+    async def handle_market_pulse_1824b(self, request: web.Request) -> web.Response:
+        payload = await self._build_market_pulse_payload_1824b()
+        return web.json_response(payload, headers={"Cache-Control": "no-store"})
+
+    async def handle_market_analytics_page_1824b(self, request: web.Request) -> web.Response:
+        from pathlib import Path as _Path
+
+        path = _Path("web/market_analytics.html")
+        headers = {
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        }
+        if not path.exists():
+            return web.Response(text="<html><body><h1>VORTEX MARKET PULSE</h1><p>HTML file not found.</p></body></html>", content_type="text/html", charset="utf-8", headers=headers, status=404)
+        return web.Response(text=path.read_text(encoding="utf-8"), content_type="text/html", charset="utf-8", headers=headers)
+    # --- END VORTEX v1.8.24-b MARKET ANALYTICS PAGE ---
 
     async def handle_dashboard(self, request: web.Request) -> web.Response:
         return web.json_response(await self._build_dashboard_payload())

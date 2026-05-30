@@ -1,25 +1,45 @@
 <!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VORTEX — Радник після пампу</title><style>body{margin:0;background:#0b1020;color:#eaf0ff;font-family:system-ui,Segoe UI,Arial}.wrap{max-width:1280px;margin:auto;padding:12px}.top{position:sticky;top:0;background:#10182bdd;backdrop-filter:blur(12px);border-bottom:1px solid #ffffff20}.head{max-width:1280px;margin:auto;padding:12px;display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap}h1{margin:0;font-size:clamp(20px,4vw,30px)}.sub,.muted{color:#9aa8c7}.pill{border:1px solid #ffffff25;border-radius:999px;padding:6px 9px;display:inline-block;margin:2px}.ok{color:#4ade80;border-color:#4ade8060}.bad{color:#fb7185;border-color:#fb718560}.warn{color:#f59e0b;border-color:#f59e0b60}.card{background:#121a2e;border:1px solid #ffffff18;border-radius:18px;padding:12px;margin-top:12px;box-shadow:0 10px 30px #0005}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.stat{background:#ffffff0c;border-radius:14px;padding:10px}.k{color:#9aa8c7;font-size:12px}.v{font-size:20px;font-weight:800}.notice{display:none;background:#f59e0b18;border:1px solid #f59e0b70;color:#fcdca5;border-radius:14px;padding:10px;margin-top:10px}.notice.show{display:block}.toolbar{display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap;margin:12px 0}button,input{border:1px solid #ffffff25;background:#ffffff10;color:#eaf0ff;border-radius:12px;padding:9px}button.active{border-color:#60a5fa;background:#60a5fa30}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #ffffff18;padding:9px;text-align:left;font-size:13px}th{color:#9aa8c7}.sym{font-weight:800}.phase{font-weight:800}.SHORT_CANDIDATE{color:#fb7185}.BREAKDOWN_WATCH,.OVEREXTENDED{color:#f59e0b}.DISTRIBUTION_WATCH{color:#c084fc}.EARLY_PUMP_WATCH,.PUMP_DETECTED{color:#60a5fa}.NO_PUMP{color:#9aa8c7}.empty{padding:18px;border:1px dashed #ffffff30;border-radius:14px;color:#9aa8c7;text-align:center}.cards{display:none;gap:10px}.item{background:#ffffff0b;border:1px solid #ffffff18;border-radius:16px;padding:12px}.row{display:flex;justify-content:space-between;gap:10px;margin-top:7px;color:#9aa8c7}.row b{color:#eaf0ff}.tradeplan{margin-top:8px;padding:9px;border:1px solid #4ade8050;background:#4ade8012;border-radius:12px;color:#d9ffe6}.tradeplan b{color:#4ade80}.tradeplan .warn{color:#fcdca5;border:0;padding:0;margin:0}@media(max-width:1024px){.stats{grid-template-columns:repeat(2,1fr)}.table{display:none}.cards{display:grid;grid-template-columns:repeat(2,1fr)}}@media(max-width:620px){.stats,.cards{grid-template-columns:1fr}input{width:100%}button{flex:1}}</style></head><body><div class="top"><div class="head"><div><h1>📉 Радник після пампу</h1><div class="sub">Сценарний радар. Не відкриває угоди й не впливає на стратегію.</div></div><div><span id="api" class="pill warn">API: очікування</span><span id="upd" class="pill">Оновлено: —</span><button onclick="resetAdvisorKey()" title="Змінити ключ пристрою">Змінити ключ</button></div></div></div><main class="wrap"><section class="card"><div class="stats"><div class="stat"><div class="k">Кандидати у SHORT</div><div id="s1" class="v">0</div></div><div class="stat"><div class="k">Очікуємо пробій</div><div id="s2" class="v">0</div></div><div class="stat"><div class="k">Розподіл</div><div id="s3" class="v">0</div></div><div class="stat"><div class="k">Перегрів</div><div id="s4" class="v">0</div></div><div class="stat"><div class="k">Усього монет</div><div id="s5" class="v">0</div></div></div><div id="notice" class="notice">⚠️ Сервер щойно перезапущено або радник тільки стартував. Дані можуть бути сирими кілька хвилин.</div><div class="muted" style="margin-top:10px"><span id="dev">Пристрій: —</span> · <span id="scr">Екран: —</span> · <span id="mode">Режим: —</span> · <span id="touch">Touch: —</span></div></section><div class="toolbar"><div id="filters"><button data-f="ALL" class="active">Усі</button><button data-f="EARLY_PUMP_WATCH">Ранній памп</button><button data-f="SHORT_CANDIDATE">SHORT</button><button data-f="BREAKDOWN_WATCH">Пробій</button><button data-f="DISTRIBUTION_WATCH">Розподіл</button><button data-f="OVEREXTENDED">Перегрів</button><button data-f="PUMP_DETECTED">Памп</button></div><input id="q" placeholder="Пошук символу..."></div><section class="card"><div class="table"><table><thead><tr><th>Символ</th><th>Фаза</th><th>Score</th><th>Памп 24г</th><th>Памп 6г</th><th>Обʼєм</th><th>EMA20</th><th>Підтримка</th><th>Чекаємо</th><th>Нотатки</th></tr></thead><tbody id="rows"></tbody></table></div><div id="cards" class="cards"></div></section></main><script>
-function advisorKey(){
+function stripQueryKeyWarning(){
   const u=new URL(location.href);
   const k=(u.searchParams.get('key')||'').trim();
   if(k){
-    localStorage.setItem('advisor_key',k);
     u.searchParams.delete('key');
     history.replaceState({}, document.title, u.pathname + (u.search ? u.search : ''));
-    return k;
+    notice.classList.add('show');
+    notice.textContent='⚠️ Ключ у URL більше не приймається. Введіть ключ у запиті нижче.';
+    return true;
   }
+  return false;
+}
+function advisorKey(){
   return (localStorage.getItem('advisor_key')||'').trim();
+}
+function collectAdvisorDevice(){
+  const w=innerWidth,h=innerHeight,t=('ontouchstart'in window)||navigator.maxTouchPoints>0;
+  const type=w<600?'phone':w<=1024?'tablet':'pc';
+  const mode=w<600?'mobile':w<=1024?'tablet':'desktop';
+  return {type,mode,width:w,height:h,dpr:devicePixelRatio||1,touch:t,userAgent:navigator.userAgent,ts:Date.now()/1000};
 }
 function advisorHeaders(extra){
   const h=Object.assign({}, extra||{});
   const k=advisorKey();
-  if(k) h['X-Advisor-Key']=k;
+  const d=collectAdvisorDevice();
+  if(k) h['Authorization']='Bearer '+k;
+  h['X-Advisor-Device']=[d.type,d.mode,d.width+'x'+d.height,d.dpr,d.touch?'touch':'no-touch'].join('|');
+  h['X-Advisor-Type']=String(d.type||'pc');
+  h['X-Advisor-Mode']=String(d.mode||'desktop');
+  h['X-Advisor-Screen']=d.width+'x'+d.height;
+  h['X-Advisor-Screen-W']=String(d.width);
+  h['X-Advisor-Screen-H']=String(d.height);
+  h['X-Advisor-Dpr']=String(d.dpr);
+  h['X-Advisor-Touch']=d.touch?'true':'false';
   return h;
 }
 function withKey(url){
   return url;
 }
 function ensureKeyPrompt(){
+  stripQueryKeyWarning();
   if(advisorKey()) return true;
   const key=prompt('Введіть ключ пристрою для Радника після пампу:');
   if(key && key.trim()){
@@ -86,15 +106,12 @@ function rowsEl(){return el('rows')}
 function cardsEl(){return el('cards')}
 
 function dev(){
-  let w=innerWidth,h=innerHeight,t=('ontouchstart'in window)||navigator.maxTouchPoints>0;
-  let type=w<600?'телефон':w<=1024?'планшет':'ПК';
-  let mode=w<600?'мобільний':w<=1024?'планшетний':'десктопний';
-  let d={type,mode,width:w,height:h,dpr:devicePixelRatio||1,touch:t,userAgent:navigator.userAgent,ts:Date.now()/1000};
+  let d=collectAdvisorDevice();
 
-  el('dev').textContent='Пристрій: '+type;
-  el('scr').textContent='Екран: '+w+'x'+h+' · DPR '+d.dpr;
-  el('mode').textContent='Режим: '+mode;
-  el('touch').textContent='Touch: '+(t?'так':'ні');
+  el('dev').textContent='Пристрій: '+d.type;
+  el('scr').textContent='Екран: '+d.width+'x'+d.height+' · DPR '+d.dpr;
+  el('mode').textContent='Режим: '+d.mode;
+  el('touch').textContent='Touch: '+(d.touch?'так':'ні');
 
   if(advisorKey()){
     fetch('/api/advisor/device-report',{
@@ -247,5 +264,5 @@ if(ensureKeyPrompt()){
   setInterval(load,7000);
   setInterval(dev,60000);
 }
-</script></body></html>
+<!-- v1.8.23-a advisor auth hardening: no URL keys, Bearer auth, device headers. --><!-- v1.8.23-c advisor ascii headers: HTTP headers must not contain Cyrillic. --></script></body></html>
 <!-- 21m-g: Цей ключ вже привʼязаний до іншого пристрою. Вам потрібен окремий ключ — зверніться до адміністратора. -->

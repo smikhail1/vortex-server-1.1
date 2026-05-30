@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VORTEX Market Pulse</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b1017;--panel:#141b24;--panel2:#19222e;--line:#293647;--text:#e9eef6;--muted:#99a8ba;--green:#55d58b;--blue:#68a8ff;--yellow:#f2c15a;--orange:#f19155;--red:#eb6a75;--violet:#aa8cff}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Arial,sans-serif;letter-spacing:0}.wrap{max-width:1480px;margin:auto;padding:18px}.top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}.eyebrow{font-size:12px;color:var(--blue);font-weight:800}.title{margin:2px 0 0;font-size:30px;line-height:1.1}.sub{margin-top:6px;color:var(--muted)}button{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:9px 12px;border-radius:6px;cursor:pointer}button:hover{border-color:var(--blue)}.actions{display:flex;gap:8px;flex-wrap:wrap}.hero,.card,.section{border:1px solid var(--line);background:var(--panel);border-radius:8px}.hero{padding:18px;margin-bottom:12px;border-left:4px solid var(--yellow)}.hero h2{margin:0 0 5px;font-size:22px}.badge{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;padding:3px 8px;font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted)}.badges{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.hero p{margin:8px 0 0;color:#c7d1de}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.card{padding:13px}.card h3,.section h2{margin:0;color:#cbd6e5}.card h3{font-size:13px;text-transform:uppercase}.big{font-size:24px;font-weight:800;margin-top:8px}.kv{display:flex;justify-content:space-between;gap:12px;border-top:1px solid #223040;padding-top:6px;margin-top:6px}.kv span:first-child{color:var(--muted)}.section{padding:14px;margin-top:12px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}.section h2{font-size:18px}.desc{color:var(--muted);margin:7px 0 0}.indices{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.index{background:var(--panel2);border:1px solid var(--line);padding:11px;border-radius:6px}.index h3{font-size:14px;margin:0 0 8px}.two{display:grid;grid-template-columns:1.3fr .7fr;gap:12px}.why{border-left:4px solid var(--blue)}table{width:100%;border-collapse:collapse}th,td{text-align:left;border-top:1px solid #283545;padding:8px 7px;vertical-align:top}th{font-size:11px;text-transform:uppercase;color:var(--muted)}.empty{color:var(--muted);padding:12px 0}.green{color:var(--green)}.blue{color:var(--blue)}.yellow{color:var(--yellow)}.orange{color:var(--orange)}.red{color:var(--red)}.muted{color:var(--muted)}.pill{display:inline-block;border-radius:999px;padding:2px 7px;background:#ffffff0d;font-size:12px}.notice{margin-top:12px;padding:10px;border:1px dashed var(--line);border-radius:6px;color:var(--muted)}.foot{margin:16px 0 2px;color:var(--muted);font-size:12px}.error{display:none;border:1px solid #eb6a7570;background:#eb6a7515;color:#ffc7cd;padding:10px;border-radius:6px;margin-bottom:12px}.error.show{display:block}
+    @media(max-width:1100px){.grid4,.indices{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}}
+    @media(max-width:640px){.wrap{padding:11px}.top{display:block}.actions{margin-top:12px}.title{font-size:24px}.grid4,.indices{grid-template-columns:1fr}.scroll{overflow:auto}th,td{white-space:nowrap}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="top">
+      <div><div class="eyebrow">READ-ONLY ANALYTICS</div><h1 class="title">VORTEX MARKET PULSE</h1><div class="sub">Сводка рынка, индексов и ближайших торговых зон</div></div>
+      <div class="actions"><button id="refresh">Обновить</button><button id="auto">Автообновление: ON</button></div>
+    </header>
+    <div id="error" class="error"></div>
+
+    <section class="hero" id="hero">
+      <h2 id="heroTitle">Загрузка рыночной сводки...</h2>
+      <div class="badges"><span class="badge" id="regime">—</span><span class="badge" id="riskMode">—</span><span class="badge" id="longPermission">LONG —</span><span class="badge" id="shortPermission">SHORT —</span></div>
+      <p id="heroText">Получаем read-only snapshot состояния VORTEX.</p>
+    </section>
+
+    <section class="grid4">
+      <article class="card"><h3>Сервер</h3><div class="big" id="healthStatus">—</div><div class="kv"><span>Режим</span><b id="healthMode">—</b></div><div class="kv"><span>Market age</span><b id="marketAge">—</b></div><div class="kv"><span>TA age</span><b id="taAge">—</b></div><div class="kv"><span>Uptime</span><b id="uptime">—</b></div></article>
+      <article class="card"><h3>Портфель</h3><div class="big" id="equity">—</div><div class="kv"><span>FUT</span><b id="futEquity">—</b></div><div class="kv"><span>SPOT</span><b id="spotEquity">—</b></div><div class="kv"><span>Позиции</span><b id="positions">—</b></div></article>
+      <article class="card"><h3>Фьючерсы</h3><div class="big" id="futCount">—</div><div class="kv"><span>Trigger crossed</span><b id="futCrossed">—</b></div><div class="kv"><span>Ready now</span><b id="futReady">—</b></div><div class="kv"><span>Направления</span><b id="futSides">—</b></div></article>
+      <article class="card"><h3>Pump Advisor</h3><div class="big" id="pumpCount">—</div><div class="kv"><span>Активный pump</span><b id="pumpActive">—</b></div><div class="kv"><span>Главная фаза</span><b id="pumpPhase">—</b></div><div class="kv"><span>Snapshot</span><b id="updated">—</b></div></article>
+    </section>
+
+    <section class="section"><div class="section-head"><h2>Индексы рынка</h2><span class="badge" id="fusionAvailable">Fusion —</span></div><div class="indices">
+      <article class="index"><h3>Heatmap</h3><div class="kv"><span>Bias</span><b id="heatBias">—</b></div><div class="kv"><span>Net score</span><b id="heatScore">—</b></div><div class="kv"><span>Below EMA20</span><b id="belowEma">—</b></div><div class="kv"><span>RSI bearish</span><b id="rsiBear">—</b></div><p class="desc">Тепловая карта показывает общий перевес покупателей или продавцов. Это фон, а не разрешение на вход.</p></article>
+      <article class="index"><h3>Ichimoku</h3><div class="kv"><span>Above cloud</span><b id="ichiAbove">—</b></div><div class="kv"><span>Below cloud</span><b id="ichiBelow">—</b></div><div class="kv"><span>Inside cloud</span><b id="ichiInside">—</b></div><div class="kv"><span>LONG / SHORT supportive</span><b id="ichiSupport">—</b></div><p class="desc">Облако помогает понять ширину тренда. Смешанная структура требует более строгого отбора.</p></article>
+      <article class="index"><h3>Futures Pressure</h3><div class="kv"><span>Pressure</span><b id="pressure">—</b></div><div class="kv"><span>24h positive</span><b id="positive24">—</b></div><div class="kv"><span>Funding positive</span><b id="funding">—</b></div><p class="desc">Фьючерсный рынок может быть активным, но активность сама по себе не является сигналом входа.</p></article>
+      <article class="index"><h3>Vortex Pressure</h3><div class="kv"><span>Ready allowed</span><b id="readyAllowed">—</b></div><div class="kv"><span>Raw ready no EA</span><b id="rawReady">—</b></div><div class="kv"><span>Watch only</span><b id="watchOnly">—</b></div><div class="kv"><span>Strategy blocked</span><b id="strategyBlocked">—</b></div><p class="desc">VORTEX может видеть идеи, но разрешает сделку только после подтверждения и защитных фильтров.</p></article>
+    </div></section>
+
+    <section class="two">
+      <div>
+        <section class="section"><div class="section-head"><h2>Фьючерсы</h2><span class="badge" id="futSummary">—</span></div><div class="grid4" id="futStats"></div><h3>Ближайшие к входу</h3><div class="scroll"><table><thead><tr><th>Монета</th><th>Сторона</th><th>Setup</th><th>Score</th><th>Дистанция</th><th>Статус</th></tr></thead><tbody id="futNear"></tbody></table></div></section>
+        <section class="section"><div class="section-head"><h2>Spot</h2><span class="badge" id="spotSummary">—</span></div><div id="spotContent"></div></section>
+      </div>
+      <div>
+        <section class="section why"><h2>Почему бот не входит?</h2><p id="whyText" class="desc">Загрузка...</p><div class="notice"><b>Что смотреть:</b><div id="watchSymbols">—</div></div><p id="recommendation" class="desc"></p></section>
+        <section class="section"><h2>Risk</h2><div class="kv"><span>Новые входы</span><b id="riskBlock">—</b></div><div class="kv"><span>Причина</span><b id="riskReason">—</b></div><div class="kv"><span>Дневной PnL</span><b id="dailyPnl">—</b></div><div class="kv"><span>Лимит убытка</span><b id="dailyLimit">—</b></div></section>
+      </div>
+    </section>
+
+    <section class="section"><div class="section-head"><h2>Pump Advisor</h2><span class="badge">READ-ONLY · NO AUTO-ENTRY</span></div><p class="desc" id="pumpText">Загрузка...</p><div class="scroll"><table><thead><tr><th>Монета</th><th>Фаза</th><th>Score</th><th>RSI</th><th>24h</th><th>6h</th><th>Объём</th><th>Статус</th></tr></thead><tbody id="pumpRows"></tbody></table></div><div class="notice"><b>Market Movers:</b> запланировано в v1.8.24. Этот блок позже будет ловить резкие пампы вне текущего пула.</div></section>
+    <div class="foot">VORTEX Market Pulse · read-only analytics · автообновление каждые 15 секунд</div>
+  </main>
+<script>
+const $=id=>document.getElementById(id);let timer=null,auto=true;
+const val=(x,d='—')=>x===null||x===undefined||x===''?d:x;
+const n=x=>Number(x||0);const money=x=>n(x).toFixed(2);const pct=x=>x===null||x===undefined?'—':n(x).toFixed(2)+'%';
+const esc=x=>String(val(x,'')).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function colorByDist(x){x=Math.abs(n(x));return x<=.1?'red':x<=.5?'orange':x<=1?'yellow':'muted'}
+function statusRu(x){return ({waiting_trigger:'Ждёт trigger',waiting_buffer:'Ждёт buffer',would_confirm_now:'Готово к проверке',invalidated:'Идея сломана',blocked:'Заблокировано'})[x]||val(x)}
+function permission(x){return val(x).replaceAll('_',' ').toUpperCase()}
+function set(id,text,cls){$(id).textContent=val(text);if(cls)$(id).className=cls}
+function kv(label,value){return `<div class="card"><h3>${esc(label)}</h3><div class="big">${esc(value)}</div></div>`}
+function nearRows(items){if(!items.length)return '<tr><td colspan="6" class="empty">Активных кандидатов нет.</td></tr>';return items.map(x=>`<tr><td><b>${esc(x.symbol)}</b></td><td>${esc(x.side)}</td><td>${esc(x.setup_type)}</td><td>${esc(x.score)}</td><td class="${colorByDist(x.dist_pct)}">${esc(n(x.dist_pct).toFixed(4))}%</td><td>${esc(statusRu(x.reason||x.stage))}</td></tr>`).join('')}
+function pumpRows(items){if(!items.length)return '<tr><td colspan="8" class="empty">Pump-сценарии не найдены.</td></tr>';return items.map(x=>`<tr><td><b>${esc(x.symbol)}</b></td><td>${esc(x.phase)}</td><td>${esc(x.score)}</td><td>${esc(x.rsi14)}</td><td>${esc(x.pump_pct_24h)}%</td><td>${esc(x.pump_pct_6h)}%</td><td>${esc(x.volume_ratio)}x</td><td>${esc(x.waiting_for)}</td></tr>`).join('')}
+function read(obj,...keys){let cur=obj||{};for(const k of keys)cur=cur&&typeof cur==='object'?cur[k]:undefined;return cur}
+function render(d){
+  const h=d.health||{},p=d.portfolio||{},pos=d.positions||{},f=read(d,'watchlist','futures')||{},s=read(d,'watchlist','spot')||{},pump=d.pump_advisor||{},r=d.market_regime||{},fusion=d.context_fusion||{},ichi=fusion.ichimoku||{},risk=d.risk||{},human=d.human_summary||{};
+  set('heroTitle',(r.regime&&r.regime.includes('risk_off')?'🟠 ':r.regime&&r.regime.includes('risk_on')?'🟢 ':'🔵 ')+val(human.title));set('regime',permission(r.regime));set('riskMode',permission(r.risk_mode));set('longPermission','LONG '+permission(r.long_permission));set('shortPermission','SHORT '+permission(r.short_permission));set('heroText',human.main_text);
+  set('healthStatus',String(val(h.status)).toUpperCase(),h.fresh?'green':'orange');set('healthMode',h.mode);set('marketAge',val(h.market_age_sec)+'s');set('taAge',val(h.ta_age_sec)+'s');set('uptime',h.uptime);
+  set('equity',money(p.total_equity));set('futEquity',money(p.fut_equity));set('spotEquity',money(p.spot_equity));set('positions','FUT '+Object.keys(pos.fut||{}).length+' / SPOT '+Object.keys(pos.spot||{}).length);
+  set('futCount',val(f.len,0)+' кандидатов');set('futCrossed',val(f.trigger_crossed,0));set('futReady',val(f.would_confirm_now,0),n(f.would_confirm_now)>0?'green':'muted');set('futSides','SHORT '+n(read(f,'sides','SHORT'))+' / LONG '+n(read(f,'sides','LONG')));
+  const phases=pump.phase_counts||{},active=n(phases.PUMP_DETECTED)+n(phases.SHORT_CANDIDATE)+n(phases.BREAKDOWN_WATCH);set('pumpCount',val(pump.symbols_count,0)+' монет');set('pumpActive',active,active?'orange':'muted');set('pumpPhase',Object.keys(phases).sort((a,b)=>n(phases[b])-n(phases[a]))[0]||'—');set('updated',new Date(d.ts*1000).toLocaleTimeString('ru-RU'));
+  set('fusionAvailable',fusion.available?'Fusion доступен':'Fusion нет данных',fusion.available?'green':'muted');set('heatBias',fusion.heatmap_bias);set('heatScore',fusion.heatmap_net_bias_score);const heat=r.heatmap||{};set('belowEma',pct(heat.below_ema20_pct));set('rsiBear',pct(heat.rsi_bearish_pct));
+  set('ichiAbove',n(ichi.above_cloud));set('ichiBelow',n(ichi.below_cloud));set('ichiInside',n(ichi.inside_cloud));set('ichiSupport',n(ichi.long_supportive)+' / '+n(ichi.short_supportive));
+  const fp=r.futures_pressure||{},vp=r.vortex_pressure||{};set('pressure',val(fp.pressure||fp.bias));set('positive24',pct(fp.positive_24h_pct));set('funding',pct(fp.funding_positive_pct));set('readyAllowed',n(vp.ready_allowed||vp.ready_allowed_count));set('rawReady',n(vp.raw_ready_no_ea||vp.raw_ready_no_ea_count));set('watchOnly',n(vp.watch_only||vp.watch_only_count));set('strategyBlocked',n(vp.strategy_blocked||vp.strategy_blocked_count));
+  set('futSummary','Watch '+n(read(f,'status_counts','watch'))+' · Blocked '+n(read(f,'status_counts','blocked')));$('futStats').innerHTML=kv('Кандидатов',n(f.len))+kv('Trigger crossed',n(f.trigger_crossed))+kv('Ready now',n(f.would_confirm_now))+kv('Invalidated',n(f.invalidated));$('futNear').innerHTML=nearRows(read(d,'near_entries','futures')||[]);
+  set('spotSummary',n(s.len)+' кандидатов');$('spotContent').innerHTML=n(s.len)?`<div class="grid4">${kv('Кандидатов',n(s.len))}${kv('BUY',n(read(s,'sides','BUY')))}${kv('Ready now',n(s.would_confirm_now))}${kv('Invalidated',n(s.invalidated))}</div><div class="scroll"><table><thead><tr><th>Монета</th><th>Сторона</th><th>Setup</th><th>Score</th><th>Дистанция</th><th>Статус</th></tr></thead><tbody>${nearRows(read(d,'near_entries','spot')||[])}</tbody></table></div>`:'<p class="empty">Spot сейчас без активных кандидатов.</p>';
+  set('whyText',human.why_no_trade);$('watchSymbols').innerHTML=(human.what_to_watch||[]).map(x=>`<span class="pill">${esc(x)}</span>`).join(' ')||'—';set('recommendation',human.recommendation);
+  set('riskBlock',risk.block_new_entries?'Заблокированы':'Разрешены',risk.block_new_entries?'red':'green');set('riskReason',risk.block_reason||'—');set('dailyPnl',money(risk.daily_realized_pnl),n(risk.daily_realized_pnl)<0?'red':'green');set('dailyLimit',money(risk.daily_loss_limit_usdt));
+  set('pumpText',pump.available?'Pump Advisor отслеживает сценарии отдельно и не открывает сделки автоматически. Активный pump: '+active+'.':'Pump Advisor snapshot пока недоступен.');$('pumpRows').innerHTML=pumpRows(pump.top_important||[]);
+}
+async function load(){try{const r=await fetch('/api/analytics/market-pulse',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);render(await r.json());$('error').classList.remove('show')}catch(e){set('error','Не удалось обновить Market Pulse: '+e.message);$('error').classList.add('show')}}
+function syncTimer(){if(timer)clearInterval(timer);timer=auto?setInterval(load,15000):null;set('auto','Автообновление: '+(auto?'ON':'OFF'))}
+$('refresh').onclick=load;$('auto').onclick=()=>{auto=!auto;syncTimer()};syncTimer();load();
+</script>
+</body>
+</html>
