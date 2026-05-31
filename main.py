@@ -15,6 +15,7 @@ from context_fusion import context_fusion_loop
 from ichimoku_context import ichimoku_context_loop
 from macro_regime_engine import macro_regime_loop
 from pump_short_advisor import pump_short_advisor_loop
+from coin_liquidity_observer import coin_liquidity_observer_loop
 from loop_runner import create_task
 from market_data import MarketDataStream
 from market_oracle import MarketOracle
@@ -918,9 +919,9 @@ async def strategy_loop(
                                         ladder=ladder,
                                     )
                                 except Exception as exc:
-                                    guard_decision = {"allow": True, "reason": f"guard_error_fail_open:{exc}"}
+                                    guard_decision = {"allow": False, "reason": f"post_close_cooldown_error:{exc}"}
                                     if logger:
-                                        logger.warning("RISK", "futures pre-open guard failed open", {
+                                        logger.warning("RISK", "futures pre-open guard failed closed", {
                                             "symbol": sym,
                                             "error": str(exc),
                                         })
@@ -1397,7 +1398,9 @@ async def main() -> None:
     confirmation_engine = ConfirmationEngine()
     defensive_gates = DefensiveGates()
 
-    risk_manager = RiskManager()
+    risk_manager = RiskManager(
+        daily_loss_limit_usdt=CONFIG.risk.daily_loss_limit_usdt,
+    )
     router = ExecutionRouter(mode=CONFIG.trading.mode)
     open_close_lock = asyncio.Lock()
 
@@ -1455,6 +1458,15 @@ async def main() -> None:
             name="pump_short_advisor",
         ),
         # --- END VORTEX v1.8.21m-a PUMP SHORT ADVISOR TASK ---
+        # --- VORTEX v1.8.24-e COIN LIQUIDITY SHADOW OBSERVER TASK ---
+        create_task(
+            coin_liquidity_observer_loop(
+                state=state,
+                logger=logger,
+            ),
+            name="coin_liquidity_observer",
+        ),
+        # --- END VORTEX v1.8.24-e COIN LIQUIDITY SHADOW OBSERVER TASK ---
         # --- VORTEX v1.8.21k-a MARKET HEATMAP TASK ---
         create_task(
             market_heatmap_loop(

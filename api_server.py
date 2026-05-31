@@ -92,6 +92,7 @@ class APIServer:
             self.app.router.add_get("/api/context-fusion", self.handle_context_fusion),
             self.app.router.add_get("/api/macro-regime", self.handle_macro_regime),
             self.app.router.add_get("/api/analytics/market-pulse", self.handle_market_pulse_1824b),
+            self.app.router.add_get("/api/analytics/coin-liquidity", self.handle_coin_liquidity_1824e),
             self.app.router.add_get("/analytics/market", self.handle_market_analytics_page_1824b),
             self.app.router.add_get("/api/advisor/pump-short", self.handle_pump_short_advisor),
             self.app.router.add_get("/advisor/pump-short", self.handle_pump_short_advisor_page),
@@ -1005,6 +1006,66 @@ class APIServer:
             "recommendation": recommendation,
         }
 
+
+    # --- VORTEX v1.8.24-e COIN LIQUIDITY SHADOW API ---
+    def _read_coin_liquidity_payload_1824e(self) -> Dict[str, Any]:
+        import json as _json
+        from pathlib import Path as _Path
+
+        path = _Path("_runtime/coin_liquidity_latest.json")
+        fallback = {
+            "available": False,
+            "read_only": True,
+            "schema": "vortex.coin_liquidity.shadow.v1",
+            "reason": "no_runtime_file",
+            "items": [],
+            "errors": [],
+        }
+        try:
+            if not path.exists():
+                return fallback
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                fallback["reason"] = "invalid_runtime_json_root"
+                return fallback
+            data["read_only"] = True
+            data.setdefault("available", bool(data.get("items")))
+            data.setdefault("items", [])
+            data.setdefault("errors", [])
+            return data
+        except Exception as exc:
+            fallback["reason"] = f"runtime_read_error:{exc}"
+            return fallback
+
+    def _market_pulse_coin_liquidity_1824e(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        from collections import Counter
+
+        payload = payload if isinstance(payload, dict) else {}
+        items = [x for x in (payload.get("items") or []) if isinstance(x, dict)]
+        items.sort(key=lambda x: safe_float(x.get("confidence"), 0.0), reverse=True)
+        counts = Counter(safe_str(x.get("liquidity_bias"), "unknown") for x in items)
+        return {
+            "available": bool(payload.get("available")),
+            "read_only": True,
+            "stale": bool(payload.get("stale")),
+            "age_sec": safe_float(payload.get("age_sec"), 0.0),
+            "items_len": len(items),
+            "bias_counts": dict(counts),
+            "top_items": items[:20],
+            "errors": (payload.get("errors") or [])[:10],
+        }
+
+    async def handle_coin_liquidity_1824e(self, request: web.Request) -> web.Response:
+        payload = self._read_coin_liquidity_payload_1824e()
+        return web.json_response({
+            "ok": True,
+            "schema": "vortex.coin_liquidity.api.v1",
+            "read_only": True,
+            "available": bool(payload.get("available")),
+            "data": payload,
+        }, headers={"Cache-Control": "no-store"})
+    # --- END VORTEX v1.8.24-e COIN LIQUIDITY SHADOW API ---
+
     async def _build_market_pulse_payload_1824b(self) -> Dict[str, Any]:
         dashboard = await self._build_dashboard_payload()
         health = await self.state.get_health_state(mode=self.mode)
@@ -1050,6 +1111,7 @@ class APIServer:
             "watchlist": {"futures": futures_summary, "spot": spot_summary},
             "near_entries": {"futures": near_futures, "spot": near_spot},
             "pump_advisor": self._market_pulse_pump_1824b(self._read_pump_short_advisor_payload()),
+            "coin_liquidity": self._market_pulse_coin_liquidity_1824e(self._read_coin_liquidity_payload_1824e()),
             "recent_events": {"available": False, "reason": "not_implemented_in_api"},
             "human_summary": self._market_pulse_human_summary_1824b(regime, futures_summary, near_futures),
         }

@@ -13,7 +13,7 @@ class RiskManager:
         futures_symbol_cooldown_sec: int = CONFIG.risk.futures_symbol_cooldown_sec,
         spot_symbol_cooldown_sec: int = CONFIG.risk.spot_symbol_cooldown_sec,
         max_trades_per_symbol_per_day: int = CONFIG.risk.max_trades_per_symbol_per_day,
-        daily_loss_limit_usdt: float = -10.0,
+        daily_loss_limit_usdt: float = CONFIG.risk.daily_loss_limit_usdt,
         max_open_futures_positions: int = CONFIG.risk.max_open_futures_positions,
         max_open_spot_positions: int = CONFIG.risk.max_open_spot_positions,
         loss_streak_limit: int = CONFIG.risk.loss_streak_limit,
