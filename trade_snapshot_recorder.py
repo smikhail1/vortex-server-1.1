@@ -25,6 +25,45 @@ class TradeSnapshotRecorder:
         data = self._safe_dict(data)
         return {k: data.get(k) for k in keys if k in data}
 
+    # VORTEX v1.8.24-h immutable Planner plan snapshot for PAPER Spot opens.
+    def _planner_snapshot_1824h(self, planner_idea: Dict[str, Any]) -> Dict[str, Any]:
+        idea = self._safe_dict(planner_idea)
+        if not idea:
+            return {}
+        targets = idea.get("targets") if isinstance(idea.get("targets"), list) else []
+        zone = self._safe_dict(idea.get("accumulation_zone"))
+        # JSON round-trip gives the append-only snapshot its own detached copy.
+        position_plan = json.loads(json.dumps(self._safe_dict(idea.get("position_plan")), ensure_ascii=False))
+        captured_at = time.time()
+        return {
+            "symbol": safe_str(idea.get("symbol")).upper(),
+            "side": safe_str(idea.get("side") or "BUY").upper(),
+            "setup_type": safe_str(idea.get("setup_type")),
+            "score": idea.get("score"),
+            "tier": idea.get("tier"),
+            "advisor_status": idea.get("advisor_status"),
+            "advisor_verdict": idea.get("advisor_verdict"),
+            "zone_quality": idea.get("zone_quality"),
+            "rr_grade": idea.get("rr_grade"),
+            "market_alignment": idea.get("market_alignment"),
+            "liquidity_alignment": idea.get("liquidity_alignment"),
+            "zone_top": safe_float(zone.get("top"), 0.0),
+            "zone_bottom": safe_float(zone.get("bottom"), 0.0),
+            "avg_entry": safe_float(idea.get("avg_entry"), 0.0),
+            "invalidation": safe_float(idea.get("invalidation"), 0.0),
+            "tp1": safe_float(targets[0].get("price"), 0.0) if len(targets) > 0 and isinstance(targets[0], dict) else safe_float(idea.get("tp_base"), 0.0),
+            "tp2": safe_float(targets[1].get("price"), 0.0) if len(targets) > 1 and isinstance(targets[1], dict) else 0.0,
+            "tp3": safe_float(targets[2].get("price"), 0.0) if len(targets) > 2 and isinstance(targets[2], dict) else safe_float(idea.get("tp_bull"), 0.0),
+            "rr_ratio": safe_float(idea.get("rr_ratio"), 0.0),
+            "plan_type": idea.get("plan_type"),
+            "plan_version": idea.get("plan_version"),
+            "idea_id": idea.get("idea_id"),
+            "generated_at": idea.get("generated_at"),
+            "captured_at": captured_at,
+            "management_profile": idea.get("management_profile"),
+            "position_plan": position_plan,
+        }
+
     def _parse_args_metrics(self, text: str) -> Dict[str, float]:
         text = safe_str(text)
         out: Dict[str, float] = {}
@@ -312,6 +351,7 @@ class TradeSnapshotRecorder:
             "planner": self._filtered(planner_idea, ["symbol", "side", "setup_type", "score", "rank", "reason", "tp_base", "sl_base", "entry_zone", "trend", "signal", "market_regime"]),
             "planner_context": planner_ctx,
             "planner_present": bool(planner_idea),
+            "planner_snapshot": self._planner_snapshot_1824h(planner_idea),
             "ladder": {"tp0": safe_float(ladder.get("tp0"), 0.0), "tp": safe_float(ladder.get("tp"), 0.0), "tp2": safe_float(ladder.get("tp2"), 0.0), "sl": safe_float(ladder.get("sl"), 0.0), "leverage": safe_float(ladder.get("leverage"), 0.0)},
             "risk": self._filtered(risk_status, ["block_new_entries", "block_reason", "daily_realized_pnl", "daily_loss_limit_usdt", "day", "max_open_futures_positions", "max_open_spot_positions"]),
             "order": order,

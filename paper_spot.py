@@ -1,5 +1,8 @@
+import json
+import os
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -26,6 +29,8 @@ class SpotPosition:
     last_event: str = ""
     setup_type: str = ""
     args_text: str = ""
+    # VORTEX v1.8.24-f0 spot pnl accounting fix
+    realized_pnl_net: float = 0.0
 
 
 class PaperSpot:
@@ -40,6 +45,7 @@ class PaperSpot:
         tp1_stall_sec: int = 600,
         min_timeout_profit_usdt: float = 0.10,
         fade_giveback_pct: float = 0.65,
+        state_path: str = "",
     ):
         self.balance = float(start_balance)
         self.positions = {}
@@ -52,6 +58,42 @@ class PaperSpot:
         self.tp1_stall_sec = tp1_stall_sec
         self.min_timeout_profit_usdt = min_timeout_profit_usdt
         self.fade_giveback_pct = fade_giveback_pct
+        # VORTEX v1.8.24-f0 spot pnl accounting fix
+        self._state_path = Path(state_path or os.environ.get("VORTEX_PAPER_SPOT_STATE_PATH", "_runtime/paper_spot_state.json"))
+        self._load_state()
+
+    def _save_state(self):
+        """Persist PAPER-only balance and open positions across restarts."""
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "schema": "vortex.paper_spot_state.v1",
+                "balance": round(float(self.balance), 8),
+                "positions": {str(k).upper(): asdict(v) for k, v in self.positions.items()},
+            }
+            tmp = self._state_path.with_suffix(self._state_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, self._state_path)
+        except Exception as exc:
+            print(f"[PAPER_SPOT] state save failed: {exc}", flush=True)
+
+    def _load_state(self):
+        """Restore PAPER-only state. Missing/corrupt files fail soft."""
+        if not self._state_path.exists():
+            return
+        try:
+            payload = json.loads(self._state_path.read_text(encoding="utf-8"))
+            self.balance = float(payload.get("balance", self.balance))
+            allowed = set(SpotPosition.__dataclass_fields__)
+            restored = {}
+            for symbol, raw in (payload.get("positions") or {}).items():
+                if not isinstance(raw, dict):
+                    continue
+                data = {k: v for k, v in raw.items() if k in allowed}
+                restored[str(symbol).upper()] = SpotPosition(**data)
+            self.positions = restored
+        except Exception as exc:
+            print(f"[PAPER_SPOT] state load failed: {exc}", flush=True)
 
     def get_balance(self):
         return round(self.balance, 8)
@@ -162,6 +204,7 @@ class PaperSpot:
             "setup_type": current.setup_type,
             "args_text": current.args_text,
         })
+        self._save_state()
 
         return {
             "code": "00000",
@@ -200,6 +243,12 @@ class PaperSpot:
         net_pnl = gross - pos.fee_open - fee_close
         self.balance += close_notional - fee_close
 
+        # VORTEX v1.8.24-f0 spot pnl accounting fix
+        # A full close must expose the executed net result. TradeManager,
+        # RiskManager and PositionStateEngine must not fall back to mark PnL.
+        closed_at = time.time()
+        hold_sec = max(0, int(closed_at - pos.open_time))
+
         trade = {
             "symbol": pos.symbol,
             "entry": round(pos.avg_price, 8),
@@ -211,7 +260,7 @@ class PaperSpot:
             "fee_close": round(fee_close, 8),
             "reason": reason,
             "opened_at": pos.open_time,
-            "closed_at": time.time(),
+            "closed_at": closed_at,
             "fills_count": pos.fills_count,
             "max_pnl_net": round(pos.max_pnl_net, 8),
             "setup_type": pos.setup_type,
@@ -219,16 +268,28 @@ class PaperSpot:
         }
         self.history.append(trade)
         del self.positions[symbol]
+        self._save_state()
 
         return {
             "code": "00000",
             "data": {
+                # VORTEX v1.8.24-f0 spot pnl accounting fix
+                "closed": True,
                 "symbol": symbol,
+                "side": "BUY",
+                "market": "SPOT",
+                "entry": round(pos.avg_price, 8),
+                "tp": round(pos.tp, 8),
+                "qty": round(pos.qty, 8),
+                "gross_pnl": round(gross, 8),
                 "pnl": round(net_pnl, 8),
+                "pnl_net": round(net_pnl, 8),
+                "cumulative_realized_pnl_net": round(float(getattr(pos, "realized_pnl_net", 0.0)) + net_pnl, 8),
                 "reason": reason,
                 "exit_price": round(exit_price, 8),
                 "fee_close": round(fee_close, 8),
                 "balance": round(self.balance, 8),
+                "hold_sec": hold_sec,
                 "setup_type": pos.setup_type,
                 "args_text": pos.args_text,
             },
@@ -302,6 +363,8 @@ class PaperSpot:
         gross = close_notional - cost_part
         realized_pnl = round(gross, 8)
         realized_pnl_net = round(gross - fee_open_part - fee_close, 8)
+        # VORTEX v1.8.24-f0 spot pnl accounting fix
+        pos.realized_pnl_net = round(float(getattr(pos, "realized_pnl_net", 0.0)) + realized_pnl_net, 8)
 
         # Spot sell returns USDT minus close fee.
         self.balance += close_notional - fee_close
@@ -321,11 +384,14 @@ class PaperSpot:
         pos.last_event = "TP1"
 
         self._update_unrealized(symbol, float(current_price))
+        self._save_state()
 
         return {
             "code": "00000",
             "data": {
                 "event_only": True,
+                # VORTEX v1.8.24-f0 spot pnl accounting fix
+                "partial_close": True,
                 "symbol": pos.symbol,
                 "side": "BUY",
                 "market": "SPOT",
@@ -343,6 +409,7 @@ class PaperSpot:
                 "close_pct": round(actual_close_pct, 6),
                 "realized_pnl": realized_pnl,
                 "realized_pnl_net": realized_pnl_net,
+                "cumulative_realized_pnl_net": round(float(pos.realized_pnl_net), 8),
                 "pnl": round(float(pos.pnl), 8),
                 "pnl_net": round(float(pos.pnl_net), 8),
                 "max_pnl_net": round(float(pos.max_pnl_net), 8),
@@ -373,6 +440,9 @@ class PaperSpot:
             if new_trail > pos.trail_sl:
                 pos.trail_sl = new_trail
                 pos.sl = pos.trail_sl
+                # VORTEX v1.8.24-f0 spot pnl accounting fix
+                # Keep the improved trailing stop across PAPER restarts.
+                self._save_state()
 
         if not pos.tp1_hit and (now - pos.open_time) >= self.profit_timeout_sec and pos.pnl_net >= self.min_timeout_profit_usdt:
             return self._close_position_internal(symbol, current_price, "TIMEOUT")

@@ -45,6 +45,9 @@ class PositionState:
     trail_active: bool = False
     close_reason: str = ""
     closed_at: float = 0.0
+    # VORTEX v1.8.24-f0 spot pnl accounting fix
+    realized_pnl_net: float = 0.0
+    last_realized_at: float = 0.0
     events: List[PositionEvent] = field(default_factory=list)
 
 class PositionStateEngine:
@@ -77,11 +80,20 @@ class PositionStateEngine:
         try:
             with open(self._storage_file, 'r') as f:
                 data = json.load(f)
-            for k, v in data.get("open", {}).items():
+            # VORTEX v1.8.24-f0 spot pnl accounting fix
+            # Keep both open and closed state across restarts. Dashboard daily
+            # realized PnL reads this file and must not lose closed rows.
+            for k, raw in data.get("open", {}).items():
+                v = dict(raw)
                 events_raw = v.pop('events', [])
                 events = [PositionEvent(**ev) for ev in events_raw]
                 self._open[k] = PositionState(**v, events=events)
-            if self.logger: self.logger.info("STATE_ENGINE", "State restored from disk", {"open": len(self._open)})
+            for raw in data.get("closed", []) or []:
+                v = dict(raw)
+                events_raw = v.pop('events', [])
+                events = [PositionEvent(**ev) for ev in events_raw]
+                self._closed.append(PositionState(**v, events=events))
+            if self.logger: self.logger.info("STATE_ENGINE", "State restored from disk", {"open": len(self._open), "closed": len(self._closed)})
         except Exception as e:
             if self.logger: self.logger.error("STATE_ENGINE", "Load failed (JSON corrupted?)", {"err": str(e)})
 
@@ -127,9 +139,34 @@ class PositionStateEngine:
         state = self._open[key]
         state.current_price = safe_float(current_price or getattr(pos, "mark_price", state.current_price))
         state.pnl_net = safe_float(getattr(pos, "pnl_net", state.pnl_net))
+        # VORTEX v1.8.24-f0 spot pnl accounting fix
+        state.realized_pnl_net = safe_float(getattr(pos, "realized_pnl_net", state.realized_pnl_net))
         state.max_pnl_net = max(state.max_pnl_net, state.pnl_net)
         state.hold_sec = int(time.time() - state.open_time)
         state.updated_at = time.time()
+        self._save_to_disk()
+        return self.to_public(state)
+
+    # VORTEX v1.8.24-f0 spot pnl accounting fix
+    def record_event(self, event, data):
+        d = data if isinstance(data, dict) else {}
+        key = self._key(d.get("symbol"), d.get("market"))
+        state = self._open.get(key)
+        if not state:
+            return None
+        realized = safe_float(d.get("realized_pnl_net"), 0.0)
+        if realized:
+            state.realized_pnl_net = round(state.realized_pnl_net + realized, 8)
+            state.last_realized_at = time.time()
+        self._event(
+            state,
+            event,
+            safe_str(d.get("reason") or d.get("event") or event),
+            price=safe_float(d.get("price", d.get("exit_price")), 0.0),
+            pnl=safe_float(d.get("pnl"), 0.0),
+            pnl_net=safe_float(d.get("pnl_net"), realized),
+            extra={"realized_pnl_net": realized} if realized else {},
+        )
         self._save_to_disk()
         return self.to_public(state)
 
@@ -137,9 +174,18 @@ class PositionStateEngine:
         key = self._key(symbol, market)
         state = self._open.pop(key, None)
         if not state: return None
+        d = data if isinstance(data, dict) else {}
+        final_leg_pnl_net = safe_float(d.get("pnl_net"), 0.0)
         state.state = "CLOSED"
+        state.current_price = safe_float(d.get("exit_price", d.get("price")), state.current_price)
+        state.pnl = safe_float(d.get("pnl"), final_leg_pnl_net)
+        state.realized_pnl_net = round(state.realized_pnl_net + final_leg_pnl_net, 8)
+        state.pnl_net = state.realized_pnl_net
         state.closed_at = time.time()
-        state.close_reason = safe_str(data.get("reason", "UNKNOWN"))
+        state.updated_at = state.closed_at
+        state.hold_sec = max(state.hold_sec, int(state.closed_at - state.open_time))
+        state.close_reason = safe_str(d.get("reason", "UNKNOWN"))
+        self._event(state, "CLOSED", state.close_reason, price=state.current_price, pnl=state.pnl, pnl_net=state.pnl_net)
         self._closed.append(state)
         self._save_to_disk()
         return self.to_public(state)

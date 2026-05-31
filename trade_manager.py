@@ -127,6 +127,16 @@ class TradeManager:
                 return
             except Exception: continue
 
+    # VORTEX v1.8.24-f0 spot pnl accounting fix
+    def _safe_register_realized_pnl(self, risk_manager, pnl_net: float, reason: str = "PARTIAL") -> None:
+        if not risk_manager or not pnl_net:
+            return
+        try:
+            if hasattr(risk_manager, "register_realized_pnl"):
+                risk_manager.register_realized_pnl(pnl_net, reason)
+        except Exception as e:
+            self._log_error("TRADE_MANAGER", f"register_realized_pnl failed: {e}")
+
     def _safe_position_event(self, event: str, payload: Dict[str, Any]) -> None:
         engine = self.position_state_engine
         if not engine: return
@@ -343,7 +353,17 @@ class TradeManager:
                     px = safe_float(data.get("exit_price"), price)
                     if data.get("event_only"):
                         await self._add_sys_log(state, "🟡 [SPOT EVENT]", f"{symbol} {reason}")
-                        self._safe_position_event(reason, {"symbol": symbol, "market": "SPOT", "event": reason, "price": px, "pnl_net": pnl_n, "data": data})
+                        # VORTEX v1.8.24-f0 spot pnl accounting fix
+                        # TP1 is a real PAPER partial sell: account the executed
+                        # leg, log it and keep the remaining position open.
+                        realized_partial = safe_float(data.get("realized_pnl_net"), 0.0)
+                        if realized_partial:
+                            self._safe_register_realized_pnl(risk_manager, realized_partial, reason)
+                            partial_log_data = dict(data)
+                            partial_log_data["pnl"] = realized_partial
+                            partial_log_data["pnl_net"] = realized_partial
+                            self._safe_log_trade(trade_logger, partial_log_data, pos, "SPOT")
+                        self._safe_position_event(reason, {"symbol": symbol, "market": "SPOT", "event": reason, "reason": reason, "price": px, "pnl_net": pnl_n, "realized_pnl_net": realized_partial, "data": data})
                     elif data.get("closed") or reason in {"SL","TP1","TP2","BU","BE","TIMEOUT","FADE","STALL"}:
                         await self._add_sys_log(state, "🔴 [SPOT CLOSED]", f"{symbol} {reason}")
                         try:

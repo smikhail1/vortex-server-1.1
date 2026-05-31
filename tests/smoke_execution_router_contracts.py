@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# VORTEX v1.8.24-f0 spot pnl accounting fix: isolate smoke runtime.
+os.environ["VORTEX_PAPER_SPOT_STATE_PATH"] = str(Path(tempfile.mkdtemp(prefix="vortex_router_smoke_")) / "paper_spot_state.json")
 
 from execution_router import ExecutionRouter
 

@@ -1,8 +1,57 @@
+import json
 import time
+from pathlib import Path
 from typing import Any, Dict, List
 
 from config import CONFIG
 from validators import safe_float, safe_int, safe_str
+
+
+# VORTEX v1.8.24-g planner quality metadata layer.
+# These helpers enrich Planner output only. They never block entries.
+LIQUIDITY_SHADOW_PATH = Path("_runtime/coin_liquidity_latest.json")
+
+
+def planner_rr_grade(rr_ratio: float) -> str:
+    if rr_ratio < 1.2:
+        return "bad"
+    if rr_ratio < 1.8:
+        return "acceptable"
+    if rr_ratio < 2.5:
+        return "good"
+    return "excellent"
+
+
+def planner_distance_to_zone_pct(price: float, zone_top: float, zone_bottom: float) -> float:
+    if price <= 0 or zone_top <= 0 or zone_bottom <= 0:
+        return 0.0
+    if zone_bottom <= price <= zone_top:
+        return 0.0
+    closest = zone_bottom if price < zone_bottom else zone_top
+    return round(abs(price - closest) / price * 100.0, 4)
+
+
+def planner_liquidity_shadow() -> Dict[str, Dict[str, Any]]:
+    try:
+        data = json.loads(LIQUIDITY_SHADOW_PATH.read_text(encoding="utf-8"))
+        return {
+            safe_str(item.get("symbol")).upper(): item
+            for item in (data.get("items") or [])
+            if isinstance(item, dict) and item.get("symbol")
+        }
+    except Exception:
+        return {}
+
+
+def planner_liquidity_alignment(item: Dict[str, Any]) -> str:
+    if not item or item.get("available") is False or item.get("stale") is True:
+        return "unknown"
+    bias = safe_str(item.get("liquidity_bias")).lower()
+    if bias in {"long", "mild_long", "strong_long"}:
+        return "supportive"
+    if bias in {"short", "mild_short", "strong_short"}:
+        return "against"
+    return "neutral"
 
 
 class SpotPlannerEngine:
@@ -171,7 +220,7 @@ class SpotPlannerEngine:
             {"price": round(tp3, 8), "close_pct": 35},
         ]
 
-    def _build_idea(self, symbol: str, payload: Dict[str, Any], macro: Dict[str, Any], rank: int) -> Dict[str, Any]:
+    def _build_idea(self, symbol: str, payload: Dict[str, Any], macro: Dict[str, Any], rank: int, liquidity_by_symbol: Dict[str, Dict[str, Any]] = None) -> Dict[str, Any]:
         # [БЕЗОПАСНОЕ ИЗВЛЕЧЕНИЕ]
         metrics = payload.get("metrics", payload)
         d1 = metrics.get("d1", {})
@@ -243,6 +292,87 @@ class SpotPlannerEngine:
         if blocked_reason:
             thesis.append(blocked_reason)
 
+        # VORTEX v1.8.24-g planner quality metadata layer.
+        # The fields below are advisory and snapshot-ready. Existing Planner
+        # selection and ready behavior intentionally remain unchanged.
+        distance_to_zone_pct = planner_distance_to_zone_pct(current_price, zone_top, zone_bottom)
+        rr_grade = planner_rr_grade(rr_ratio)
+        too_late = bool(zone_top > 0 and current_price > zone_top * 1.03)
+        bad_rr = rr_grade == "bad"
+        if zone_bottom <= current_price <= zone_top:
+            zone_quality = "in_zone"
+        elif distance_to_zone_pct <= 1.0:
+            zone_quality = "near_zone"
+        elif too_late:
+            zone_quality = "too_late"
+        else:
+            zone_quality = "outside_zone"
+
+        regime = safe_str(macro.get("regime") or macro.get("risk_state"), "neutral").lower()
+        if global_filter == "block_longs" or regime in {"risk_off", "risk_off_bearish"}:
+            market_alignment = "against"
+        elif regime in {"risk_on", "risk_on_bullish", "mild_risk_on"}:
+            market_alignment = "supportive"
+        else:
+            market_alignment = "neutral"
+
+        liquidity_item = (liquidity_by_symbol or {}).get(symbol.upper(), {})
+        liquidity_alignment = planner_liquidity_alignment(liquidity_item)
+        warnings = []
+        if bad_rr:
+            warnings.append("bad_rr")
+        if too_late:
+            warnings.append("price_too_far_above_zone")
+        if market_alignment == "against":
+            warnings.append("macro_market_against_buy")
+        if liquidity_alignment == "against":
+            warnings.append("liquidity_shadow_against_buy")
+
+        if current_price < invalidation:
+            advisor_status = "INVALIDATED"
+        elif bad_rr:
+            advisor_status = "BAD_RR"
+        elif too_late:
+            advisor_status = "TOO_LATE"
+        elif market_alignment == "against":
+            advisor_status = "MARKET_AGAINST"
+        elif liquidity_alignment == "against":
+            advisor_status = "LIQUIDITY_CONFLICT"
+        elif zone_quality == "in_zone":
+            advisor_status = "WAIT_CONFIRMATION"
+        elif zone_quality == "near_zone":
+            advisor_status = "NEAR_ZONE"
+        else:
+            advisor_status = "IDEA_ONLY"
+
+        advisor_verdict = {
+            "INVALIDATED": "idea_invalidation_breached",
+            "BAD_RR": "bad_risk_reward",
+            "TOO_LATE": "price_above_entry_zone",
+            "MARKET_AGAINST": "macro_market_against_buy",
+            "LIQUIDITY_CONFLICT": "liquidity_shadow_conflict",
+            "WAIT_CONFIRMATION": "valid_idea_wait_confirmation",
+            "NEAR_ZONE": "valid_idea_near_zone",
+        }.get(advisor_status, "idea_only_wait_zone")
+        generated_at = int(time.time())
+        position_plan = {
+            "source": "planner",
+            "plan_type": "planner_swing_spot",
+            "plan_version": "1.8.24-g",
+            "management_profile": "planner_swing_spot_v1",
+            "entry_mode": "single_entry_first",
+            "tp1": targets[0]["price"],
+            "tp1_close_pct": 30,
+            "tp2": targets[1]["price"],
+            "tp2_close_pct": 35,
+            "runner_pct": 35,
+            "invalidation": invalidation,
+            "breakeven_after_tp1": True,
+            "trail_atr_mult": 1.8,
+            "timeout_sec": 2419200,
+            "weak_progress_sec": 604800,
+        }
+
         return {
             "symbol": symbol,
             "tier": tier,
@@ -284,15 +414,36 @@ class SpotPlannerEngine:
             "tp_base": targets[0]["price"],
             "tp_bull": targets[2]["price"],
             "reasons": thesis[:8],
+            "plan_type": "planner_swing_spot",
+            "plan_version": "1.8.24-g",
+            "idea_id": f"planner:{symbol}:{generated_at}",
+            "generated_at": generated_at,
+            "captured_at": None,
+            "management_profile": "planner_swing_spot_v1",
+            "advisor_status": advisor_status,
+            "advisor_verdict": advisor_verdict,
+            "zone_quality": zone_quality,
+            "zone_grade": zone_quality,
+            "rr_grade": rr_grade,
+            "market_alignment": market_alignment,
+            "liquidity_alignment": liquidity_alignment,
+            "distance_to_zone_pct": distance_to_zone_pct,
+            "too_late": too_late,
+            "bad_rr": bad_rr,
+            "quality_notes": warnings[:],
+            "warnings": warnings[:],
+            "position_plan": position_plan,
         }
 
     def build(self, planner_market_data: Dict[str, Any], macro: Dict[str, Any]) -> Dict[str, Any]:
         symbols_map = planner_market_data.get("symbols", {}) if isinstance(planner_market_data, dict) else {}
         ideas: List[Dict[str, Any]] = []
+        # Shadow-only context: absence or corruption must never break Planner.
+        liquidity_by_symbol = planner_liquidity_shadow()
 
         for symbol, payload in symbols_map.items():
             try:
-                idea = self._build_idea(symbol, payload, macro or {}, rank=0)
+                idea = self._build_idea(symbol, payload, macro or {}, rank=0, liquidity_by_symbol=liquidity_by_symbol)
                 ideas.append(idea)
             except Exception as exc:
                 if self.logger:

@@ -1242,6 +1242,20 @@ async def strategy_loop(
                     order_usdt = CONFIG.trading.spot_order_usdt  # audit-fix: use config value
                     qty = order_usdt / price
 
+                    # VORTEX v1.8.24-h: preserve compact Planner context
+                    # in PAPER trade history. This changes diagnostics only.
+                    spot_args_text = safe_str(analysis.get("args_text"))
+                    if isinstance(planner_idea, dict) and planner_idea:
+                        planner_log_summary = (
+                            f"Planner {safe_str(planner_idea.get('tier'), '?')} | "
+                            f"RR {safe_str(planner_idea.get('rr_grade'), '?')} "
+                            f"{safe_float(planner_idea.get('rr_ratio'), 0.0):.2f} | "
+                            f"Zone {safe_str(planner_idea.get('zone_quality'), '?')} | "
+                            f"Market {safe_str(planner_idea.get('market_alignment'), '?')} | "
+                            f"Liquidity {safe_str(planner_idea.get('liquidity_alignment'), '?')}"
+                        )
+                        spot_args_text = f"{spot_args_text} | {planner_log_summary}".strip(" |")
+
                     result = router.open_spot_position(
                         symbol=sym,
                         qty=qty,
@@ -1249,7 +1263,7 @@ async def strategy_loop(
                         tp=tp,
                         atr=atr_abs,
                         setup_type=safe_str(analysis.get("setup_type")),
-                        args_text=safe_str(analysis.get("args_text")),
+                        args_text=spot_args_text,
                     )
 
                     if result.get("code") == "00000":
@@ -1260,7 +1274,7 @@ async def strategy_loop(
                             f"{sym} BUY {analysis['setup_type']} @ {price:.8f} | "
                             f"entry1={order_usdt:.2f} USDT | "
                             f"confirmed={safe_str(item.get('confirmation_reason'))} | "
-                            f"{analysis['args_text']}"
+                            f"{spot_args_text}"
                         )
 
                         await state.add_sys_log("🟢 [SPOT OPEN]", open_msg)
@@ -1288,7 +1302,7 @@ async def strategy_loop(
                             reason="OPEN",
                             hold_sec=0,
                             setup_type=safe_str(analysis.get("setup_type")),
-                            args_text=safe_str(analysis.get("args_text")),
+                            args_text=spot_args_text,
                         )
 
                         if trade_snapshot_recorder:
@@ -1299,7 +1313,7 @@ async def strategy_loop(
                                     side="BUY",
                                     result=result,
                                     current=current,
-                                    analysis=analysis,
+                                    analysis={**analysis, "args_text": spot_args_text},
                                     watch=item,
                                     planner_idea=planner_map.get(sym),
                                     ladder={"tp": tp, "sl": ladder.get("sl"), "tp2": ladder.get("tp2")},

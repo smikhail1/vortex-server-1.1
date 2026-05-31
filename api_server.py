@@ -93,6 +93,8 @@ class APIServer:
             self.app.router.add_get("/api/macro-regime", self.handle_macro_regime),
             self.app.router.add_get("/api/analytics/market-pulse", self.handle_market_pulse_1824b),
             self.app.router.add_get("/api/analytics/coin-liquidity", self.handle_coin_liquidity_1824e),
+            self.app.router.add_get("/api/analytics/planner-audit", self.handle_planner_audit_1824f),
+            self.app.router.add_get("/api/analytics/spot-position-advisor", self.handle_spot_position_advisor_1824i),
             self.app.router.add_get("/analytics/market", self.handle_market_analytics_page_1824b),
             self.app.router.add_get("/api/advisor/pump-short", self.handle_pump_short_advisor),
             self.app.router.add_get("/advisor/pump-short", self.handle_pump_short_advisor_page),
@@ -157,6 +159,15 @@ class APIServer:
                         today_realized_fut += pnl_net
                     elif market == "SPOT":
                         today_realized_spot += pnl_net
+
+                # VORTEX v1.8.24-f0 spot pnl accounting fix
+                # A TP1 partial sell is realized even while the residual Spot
+                # position remains open.
+                for open_trade in (st.get("open", {}) or {}).values():
+                    market = str(open_trade.get("market", "")).upper()
+                    last_realized_at = safe_float(open_trade.get("last_realized_at", 0.0))
+                    if market == "SPOT" and last_realized_at >= today_start_ts:
+                        today_realized_spot += safe_float(open_trade.get("realized_pnl_net", 0.0))
         except Exception:
             today_realized_fut = 0.0
             today_realized_spot = 0.0
@@ -1066,6 +1077,60 @@ class APIServer:
         }, headers={"Cache-Control": "no-store"})
     # --- END VORTEX v1.8.24-e COIN LIQUIDITY SHADOW API ---
 
+    # --- VORTEX v1.8.24-f PLANNER QUALITY AUDIT (READ-ONLY) ---
+    def _planner_audit_payload_1824f(self, dashboard: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            from tools.planner_audit import build_planner_audit
+
+            return build_planner_audit(
+                dashboard=dashboard,
+                liquidity_payload=self._read_coin_liquidity_payload_1824e(),
+                macro_payload=dashboard.get("macro_regime") if isinstance(dashboard, dict) else {},
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "schema": "vortex.planner_audit.api.v1",
+                "read_only": True,
+                "items_len": 0,
+                "items": [],
+                "summary": {},
+                "reason": f"planner_audit_error:{exc}",
+            }
+
+    async def handle_planner_audit_1824f(self, request: web.Request) -> web.Response:
+        dashboard = await self._build_dashboard_payload()
+        return web.json_response(self._planner_audit_payload_1824f(dashboard), headers={"Cache-Control": "no-store"})
+    # --- END VORTEX v1.8.24-f PLANNER QUALITY AUDIT ---
+
+    # --- VORTEX v1.8.24-i SPOT MANAGEMENT SHADOW (READ-ONLY) ---
+    def _spot_position_advisor_payload_1824i(self, dashboard: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            from spot_position_advisor import build_spot_position_advisor, load_latest_planner_snapshots
+
+            positions = self.router.get_all_spot_positions() if self.router else {}
+            ta_data = (dashboard.get("market") or {}).get("ta_data") or {}
+            return build_spot_position_advisor(
+                positions=positions,
+                ta_data=ta_data,
+                planner_snapshots=load_latest_planner_snapshots(),
+                liquidity_payload=self._read_coin_liquidity_payload_1824e(),
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "schema": "vortex.spot_position_advisor.shadow.v1",
+                "read_only": True,
+                "items_len": 0,
+                "items": [],
+                "reason": f"spot_position_advisor_error:{exc}",
+            }
+
+    async def handle_spot_position_advisor_1824i(self, request: web.Request) -> web.Response:
+        dashboard = await self._build_dashboard_payload()
+        return web.json_response(self._spot_position_advisor_payload_1824i(dashboard), headers={"Cache-Control": "no-store"})
+    # --- END VORTEX v1.8.24-i SPOT MANAGEMENT SHADOW ---
+
     async def _build_market_pulse_payload_1824b(self) -> Dict[str, Any]:
         dashboard = await self._build_dashboard_payload()
         health = await self.state.get_health_state(mode=self.mode)
@@ -1112,6 +1177,8 @@ class APIServer:
             "near_entries": {"futures": near_futures, "spot": near_spot},
             "pump_advisor": self._market_pulse_pump_1824b(self._read_pump_short_advisor_payload()),
             "coin_liquidity": self._market_pulse_coin_liquidity_1824e(self._read_coin_liquidity_payload_1824e()),
+            "planner_audit": self._planner_audit_payload_1824f(dashboard),
+            "spot_position_advisor": self._spot_position_advisor_payload_1824i(dashboard),
             "recent_events": {"available": False, "reason": "not_implemented_in_api"},
             "human_summary": self._market_pulse_human_summary_1824b(regime, futures_summary, near_futures),
         }

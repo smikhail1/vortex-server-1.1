@@ -140,6 +140,14 @@ class RiskManager:
         self.trades_per_day[day_key] += 1
         self._save_state()
 
+    # VORTEX v1.8.24-f0 spot pnl accounting fix
+    def register_realized_pnl(self, pnl: float = 0.0, reason: str = "PARTIAL") -> None:
+        """Account a partial realized leg without marking the symbol closed."""
+        self._maybe_reset_day()
+        self.daily_realized_pnl += safe_float(pnl)
+        self._check_circuit_breaker()
+        self._save_state()
+
     def register_close(self, symbol: str, market_type: str, pnl: float = 0.0, reason: str = "CLOSE") -> None:
         self._maybe_reset_day()
         value = safe_float(pnl)
